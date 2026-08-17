@@ -14,12 +14,13 @@ ranges as parallel chunked requests instead of one long sequential cursor-walk, 
 raw records into chart-ready summaries, and caches finalized (immutable) historical data so
 repeat requests are instant.
 
-## Running it
+## Setup
 
 Requires Node 18+ (for native `fetch`).
 
 ```bash
 npm run install:all
+cp server/.env.example server/.env
 npm run dev
 ```
 
@@ -29,11 +30,64 @@ This starts:
 
 Open http://localhost:5173.
 
+The app works with `server/.env` completely empty (every value has a public-endpoint
+default baked into `server/src/config.js`) — you only need to fill in the optional
+keys below if you want the two features backed by them.
+
+### Optional: Dune Analytics (all-time Soroban stats)
+
+Without this, the Smart Contracts page's "all-time asset movement" and "Soroswap
+usage over time" sections just show as unavailable — everything else works fine.
+
+1. Free account at [dune.com](https://dune.com), then an API key from your account
+   settings → `DUNE_API_KEY` in `server/.env`.
+2. In Dune's query editor (Dune SQL engine), save this query for the all-time
+   asset-movement stat, then put its numeric query ID in `DUNE_QUERY_ID`:
+   ```sql
+   select
+     coalesce(e.asset_code, 'XLM') as asset_code,
+     e.asset_issuer,
+     sum(e.amount) as total_amount,
+     count(*) as effect_count
+   from stellar.history_operations o
+   join stellar.history_effects e on e.operation_id = o.id
+   where o.type_string = 'invoke_host_function'
+     and e.type_string in ('account_credited', 'trustline_credited')
+   group by 1, 2
+   order by total_amount desc
+   limit 200
+   ```
+3. Optionally, also save this one for the Soroswap call-volume trend, and put its
+   ID in `DUNE_SOROSWAP_TREND_QUERY_ID`:
+   ```sql
+   select
+     o.closed_at_date as day,
+     o.function,
+     count(*) as call_count
+   from stellar.history_operations o
+   where o.type_string = 'invoke_host_function'
+     and o.contract_id in (
+       'CA4HEQTL2WPEUYKYKCDOHCDNIV4QHNJ7EL4J4NQ6VADP7SYHVRYZ7AW2', -- Soroswap Factory
+       'CAG5LRYQ5JVEUI5TEID72EYOVX44TTUJT5BQR2J6J77FH65PCCFAJDDH'  -- Soroswap Router
+     )
+   group by 1, 2
+   order by 1
+   ```
+
+Both routes only ever read a saved query's latest cached result (free, no fresh
+execution triggered), cached server-side for hours — this won't burn through
+Dune's free-tier credits under normal use.
+
+### Optional: nothing else needed for DeFiLlama
+
+The Protocols page (on-chain protocol rankings, trading volume trends) uses
+DeFiLlama's public API directly — free, no API key, nothing to configure.
+
 ## Project layout
 
 ```
 server/                  Express API — the only thing that talks to Horizon/Soroban RPC
-                          (plus DeFiLlama and Dune — see CLAUDE.md's third-party data section)
+                          (plus DeFiLlama and Dune — see "Setup" above)
   src/
     config.js            Mainnet + testnet endpoint pairs, tunable via .env
     cache.js             In-memory TTL cache (long TTL for finalized history, short for live data)
@@ -48,7 +102,8 @@ server/                  Express API — the only thing that talks to Horizon/So
                           and contracts.js)
     httpError.js            Shared "Error with an HTTP status attached" constructor
     validate.js             Date-range parsing/validation (also floors to the minute
-                          for stable cache keys — see CLAUDE.md)
+                          for stable cache keys, and caps range width — see the code
+                          comments for why)
     routes/
       network.js          Live network stats + recent ledger stream
       ledgers.js          Ledger/tx volume over a date range (from /ledgers, not raw txs)
@@ -60,9 +115,9 @@ server/                  Express API — the only thing that talks to Horizon/So
       contracts.js          Soroban contract events (RPC, ~7-day retention) with
                             automatic fallback to Horizon invoke_host_function ops
                             for older ranges, plus an all-time asset-movement stat
-                            backed by Dune (see CLAUDE.md)
+                            and a Soroswap call-volume trend, both backed by Dune
       protocols.js           On-chain protocol ranking by volume/TVL, backed by
-                            DeFiLlama (see CLAUDE.md)
+                            DeFiLlama
 
 client/                  React + Vite
   src/
@@ -77,11 +132,14 @@ client/                  React + Vite
 
 ## Review history
 
-This project went through repeated rounds of self-review (see `CLAUDE.md` for the
-full log and the process itself) — real bugs were found and fixed, not just
-architecture polish. If you're modifying this code, read `CLAUDE.md` first; it has
-verified facts about Horizon/Soroban RPC behavior that took real research to pin
-down, and a list of what's already been fixed so it isn't accidentally reintroduced.
+This project went through several full rounds of review before this commit —
+checking correctness, efficiency, and every upstream API assumption against the
+real Horizon/Soroban RPC/Dune/DeFiLlama responses, not just re-reading the code.
+Real bugs were found and fixed each round; a fair number of them were only
+reachable through actual usage (date-math edge cases, cache-key gaps, response
+fields nobody was reading), which is why the code comments in this repo tend to
+explain *why* something is written a specific way, not just what it does — that
+context is usually the record of a bug that shape of code was written to avoid.
 
 ## Notes / known limits
 
