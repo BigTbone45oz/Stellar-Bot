@@ -42,21 +42,40 @@ router.get('/account-trend', async (req, res, next) => {
     const data = await cached('growthAccountTrend:pubnet', TTL.FINALIZED, async () => {
       const rows = await fetchDuneQueryResults(DUNE_ACCOUNT_GROWTH_QUERY_ID);
 
-      const allDaily = rows
-        .map((r) => {
-          const accountsCreated = Number(r.accounts_created) || 0;
-          const accountsMerged = Number(r.accounts_merged) || 0;
-          return { day: r.day, accountsCreated, accountsMerged, netGrowth: accountsCreated - accountsMerged };
-        })
+      // Grouped by day rather than assuming the query emits exactly one row
+      // per day — same defensive shape as /trustline-trend's Map below and
+      // contracts.js's /protocol-trend, in case a future query re-shape (or a
+      // grouping dimension added later) ever produces duplicate day rows;
+      // without this, duplicates wouldn't merge and would silently shrink the
+      // number of distinct calendar days covered by the trailing-window cutoff
+      // below.
+      const byDay = new Map();
+      for (const r of rows) {
+        const entry = byDay.get(r.day) || { day: r.day, accountsCreated: 0, accountsMerged: 0 };
+        entry.accountsCreated += Number(r.accounts_created) || 0;
+        entry.accountsMerged += Number(r.accounts_merged) || 0;
+        byDay.set(r.day, entry);
+      }
+      const allDaily = Array.from(byDay.values())
+        .map((d) => ({ ...d, netGrowth: d.accountsCreated - d.accountsMerged }))
         .sort((a, b) => (a.day < b.day ? -1 : 1));
 
       // All-time totals, computed before trimming — not affected by TREND_DAYS.
       const totalAccountsCreated = allDaily.reduce((sum, d) => sum + d.accountsCreated, 0);
       const totalAccountsMerged = allDaily.reduce((sum, d) => sum + d.accountsMerged, 0);
 
+      // Filtered by an actual date cutoff, not a trailing array slice — the
+      // Dune query only emits a row for days with at least one matching
+      // operation, so a day with zero account creates/merges simply has no
+      // row. Slicing the last TREND_DAYS *entries* would silently reach
+      // further back than TREND_DAYS *calendar days* whenever such a gap
+      // exists, while still being labeled "last 180 days" on the client.
+      const cutoffDay = new Date(Date.now() - TREND_DAYS * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const daily = allDaily.filter((d) => d.day >= cutoffDay);
+
       return {
         available: true,
-        daily: allDaily.slice(-TREND_DAYS),
+        daily,
         totalAccountsCreated,
         totalAccountsMerged,
         netAccountGrowth: totalAccountsCreated - totalAccountsMerged,
@@ -101,14 +120,13 @@ router.get('/trustline-trend', async (req, res, next) => {
         totals.set(assetKey, entry);
       }
 
-      const assetTotals = Array.from(totals.values())
-        .sort((a, b) => b.changeCount - a.changeCount)
-        .slice(0, TOP_TRUSTLINE_ASSETS_SHOWN);
+      const allAssets = Array.from(totals.values()).sort((a, b) => b.changeCount - a.changeCount);
+      const totalTrustlineChanges = allAssets.reduce((sum, a) => sum + a.changeCount, 0);
 
       return {
         available: true,
-        totalTrustlineChanges: Array.from(totals.values()).reduce((sum, a) => sum + a.changeCount, 0),
-        assetTotals,
+        totalTrustlineChanges,
+        assetTotals: allAssets.slice(0, TOP_TRUSTLINE_ASSETS_SHOWN),
       };
     });
 
