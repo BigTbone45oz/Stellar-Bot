@@ -13,7 +13,6 @@ async function request(path, params = {}) {
 
 export const api = {
   overview: (network) => request('/api/network/overview', { network }),
-  recentLedgers: (network, limit) => request('/api/network/recent-ledgers', { network, limit }),
   ledgerVolume: (network, start, end) => request('/api/ledgers/volume', { network, start, end }),
   opsBreakdown: (network, start, end) => request('/api/payments/breakdown', { network, start, end }),
   account: (network, id) => request(`/api/accounts/${id}`, { network }),
@@ -28,4 +27,6 @@ export const api = {
   contractsProtocolTrend: (network) => request('/api/contracts/protocol-trend', { network }),
   contractsNetworkTradingActivity: (network) => request('/api/contracts/network-trading-activity', { network }),
   protocolsRanking: (network) => request('/api/protocols/ranking', { network }),
+  accountGrowthTrend: (network) => request('/api/growth/account-trend', { network }),
+  trustlineGrowthTrend: (network) => request('/api/growth/trustline-trend', { network }),
 };

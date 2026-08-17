@@ -9,11 +9,13 @@ import Assets from './views/Assets.jsx';
 import SmartContracts from './views/SmartContracts.jsx';
 import Trades from './views/Trades.jsx';
 import Protocols from './views/Protocols.jsx';
+import NetworkGrowth from './views/NetworkGrowth.jsx';
 
 const TABS = [
   { id: 'overview', label: 'Overview', component: Overview },
   { id: 'assets', label: 'Assets', component: Assets },
   { id: 'contracts', label: 'Smart Contracts', component: SmartContracts },
+  { id: 'growth', label: 'Network Growth', component: NetworkGrowth },
   { id: 'protocols', label: 'Protocols', component: Protocols },
   { id: 'ledgers', label: 'Ledgers & Transactions', component: LedgersTransactions },
   { id: 'payments', label: 'Payments & Operations', component: PaymentsOperations },

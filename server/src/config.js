@@ -26,6 +26,12 @@ export const DUNE_QUERY_ID = process.env.DUNE_QUERY_ID || null;
 export const DUNE_SOROSWAP_TREND_QUERY_ID = process.env.DUNE_SOROSWAP_TREND_QUERY_ID || null;
 export const DUNE_SOROSWAP_FUNCTIONS_QUERY_ID = process.env.DUNE_SOROSWAP_FUNCTIONS_QUERY_ID || null;
 export const DUNE_NETWORK_TRADES_QUERY_ID = process.env.DUNE_NETWORK_TRADES_QUERY_ID || null;
+// Powers the account-creation/closure trend on the Network Growth page — see
+// routes/growth.js's /account-trend route.
+export const DUNE_ACCOUNT_GROWTH_QUERY_ID = process.env.DUNE_ACCOUNT_GROWTH_QUERY_ID || null;
+// Powers the per-asset trustline growth breakdown on the Network Growth page —
+// see routes/growth.js's /trustline-trend route.
+export const DUNE_TRUSTLINE_GROWTH_QUERY_ID = process.env.DUNE_TRUSTLINE_GROWTH_QUERY_ID || null;
 
 export function resolveNetwork(param) {
   const key = param === 'testnet' ? 'testnet' : 'pubnet';

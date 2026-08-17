@@ -40,6 +40,12 @@ router.get('/:id', async (req, res, next) => {
           amount: p.amount,
           assetType: p.asset_type,
           assetCode: p.asset_code,
+          // Two different assets can share the same code under different
+          // issuers (the exact ambiguity assets.js's /top numAccounts and
+          // payments.js's swap legs already account for) — without the
+          // issuer, a payment in a shared code (real or a look-alike scam
+          // token) is indistinguishable from the legitimate asset.
+          assetIssuer: p.asset_issuer,
           createdAt: p.created_at,
           transactionHash: p.transaction_hash,
         })),

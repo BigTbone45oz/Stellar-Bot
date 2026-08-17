@@ -122,8 +122,33 @@ usage over time" sections just show as unavailable — everything else works fin
    see `CLAUDE.md`'s "Third-party data integrations" section (if you have it
    locally — it's not tracked in this repo) or the code comments in
    `contracts.js`'s `/network-trading-activity` route for the details.
+6. Optionally, also save this one for the Network Growth page's all-time
+   account creation/closure trend, and put its ID in `DUNE_ACCOUNT_GROWTH_QUERY_ID`:
+   ```sql
+   select
+     o.closed_at_date as day,
+     sum(case when o.type_string = 'create_account' then 1 else 0 end) as accounts_created,
+     sum(case when o.type_string = 'account_merge' then 1 else 0 end) as accounts_merged
+   from stellar.history_operations o
+   where o.type_string in ('create_account', 'account_merge')
+   group by 1
+   order by 1
+   ```
+7. Optionally, also save this one for the Network Growth page's per-asset
+   trustline breakdown, and put its ID in `DUNE_TRUSTLINE_GROWTH_QUERY_ID`:
+   ```sql
+   select
+     o.closed_at_date as day,
+     o.asset_code,
+     o.asset_issuer,
+     count(*) as trustline_changes
+   from stellar.history_operations o
+   where o.type_string = 'change_trust'
+   group by 1, 2, 3
+   order by 1
+   ```
 
-All four routes only ever read a saved query's latest cached result (free, no
+All six routes only ever read a saved query's latest cached result (free, no
 fresh execution triggered), cached server-side for hours — this won't burn
 through Dune's free-tier credits under normal use.
 
@@ -156,7 +181,10 @@ server/                  Express API — the only thing that talks to Horizon/So
     routes/
       network.js          Live network stats + recent ledger stream
       ledgers.js          Ledger/tx volume over a date range (from /ledgers, not raw txs)
-      payments.js         Operation-type breakdown over a date range (aggregated + cached)
+      payments.js         Operation-type breakdown over a date range: op counts, contract-
+                          caused asset movement, plain payment volume (USD), and network
+                          growth (new accounts/trustlines) — all from one /operations pass,
+                          aggregated + cached
       accounts.js          Account lookup: balances + recent activity
       assets.js            Top-100 ranking, asset search, and trade_aggregations
                           price/volume history
@@ -167,6 +195,9 @@ server/                  Express API — the only thing that talks to Horizon/So
                             and a Soroswap call-volume trend, both backed by Dune
       protocols.js           On-chain protocol ranking by volume/TVL, backed by
                             DeFiLlama
+      growth.js               All-time account creation/closure trend and per-asset
+                            trustline growth breakdown, both backed by Dune (live-
+                            Horizon can't reach back far enough for a real trend)
 
 client/                  React + Vite
   src/
@@ -175,8 +206,8 @@ client/                  React + Vite
     opTypes.js               Horizon operation-type / host-function-type labels+descriptions
     contractFunctions.js      Heuristic descriptions for common Soroban contract function names
     components/          NetworkToggle, DateRangePicker, ChartPanel, StatCard, Tabs
-    views/                One file per tab — Overview, Assets, SmartContracts, Protocols,
-                          LedgersTransactions, PaymentsOperations, Accounts, Trades
+    views/                One file per tab — Overview, Assets, SmartContracts, NetworkGrowth,
+                          Protocols, LedgersTransactions, PaymentsOperations, Accounts, Trades
 ```
 
 ## Review history

@@ -10,14 +10,8 @@ function formatUsd(n) {
   return n.toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 }
 
-// Fixed, not user-adjustable — this page is a glance-at-a-dashboard summary,
-// not an exploration tool (that's what the dedicated tabs are for). 24h matches
-// PaymentsOperations.jsx's own default for the same route.
-const RECENT_OPS_RANGE = defaultRange(24);
-
 export default function Overview({ network }) {
   const [overview, setOverview] = useState(null);
-  const [ledgers, setLedgers] = useState([]);
   const [error, setError] = useState(null);
 
   // Both the 30s interval and the visibilitychange handler can call load()
@@ -29,6 +23,13 @@ export default function Overview({ network }) {
 
   useEffect(() => {
     let cancelled = false;
+    // Unlike every other slice in this file, the StatCards below render
+    // `overview` directly with no loading gate — without this, the previous
+    // network's ledger number/base fee stayed on screen (now silently
+    // mislabeled) until the new network's poll resolved.
+    requestIdRef.current += 1;
+    setOverview(null);
+    setError(null);
     async function load() {
       // Skip while the tab is hidden — no point polling Horizon for a chart
       // nobody's looking at. Refreshes immediately on visibilitychange below
@@ -36,10 +37,9 @@ export default function Overview({ network }) {
       if (document.visibilityState === 'hidden') return;
       const myRequestId = ++requestIdRef.current;
       try {
-        const [o, l] = await Promise.all([api.overview(network), api.recentLedgers(network, 10)]);
+        const o = await api.overview(network);
         if (!cancelled && requestIdRef.current === myRequestId) {
           setOverview(o);
-          setLedgers(l);
           setError(null);
         }
       } catch (e) {
@@ -72,20 +72,40 @@ export default function Overview({ network }) {
   const [networkTradesError, setNetworkTradesError] = useState(null);
   const [protocolsRanking, setProtocolsRanking] = useState(null);
   const [protocolsRankingError, setProtocolsRankingError] = useState(null);
-  const [topAssets, setTopAssets] = useState([]);
+  const [topAssets, setTopAssets] = useState(null);
   const [topAssetsError, setTopAssetsError] = useState(null);
   const [recentOps, setRecentOps] = useState(null);
   const [recentOpsError, setRecentOpsError] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
+    // Clear every slice (data + error) before firing the new-network fetches —
+    // otherwise the previous network's numbers stay on screen, now mislabeled,
+    // for however long the new requests take (these aren't gated by a chart
+    // "loading" prop the way ChartPanel's own data is).
+    setContractsAllTime(null);
+    setContractsAllTimeError(null);
+    setProtocolTrend(null);
+    setProtocolTrendError(null);
+    setNetworkTrades(null);
+    setNetworkTradesError(null);
+    setProtocolsRanking(null);
+    setProtocolsRankingError(null);
+    setTopAssets(null);
+    setTopAssetsError(null);
+    setRecentOps(null);
+    setRecentOpsError(null);
+
     api.contractsAllTime(network).then((d) => !cancelled && setContractsAllTime(d)).catch((e) => !cancelled && setContractsAllTimeError(e.message));
     api.contractsProtocolTrend(network).then((d) => !cancelled && setProtocolTrend(d)).catch((e) => !cancelled && setProtocolTrendError(e.message));
     api.contractsNetworkTradingActivity(network).then((d) => !cancelled && setNetworkTrades(d)).catch((e) => !cancelled && setNetworkTradesError(e.message));
     api.protocolsRanking(network).then((d) => !cancelled && setProtocolsRanking(d)).catch((e) => !cancelled && setProtocolsRankingError(e.message));
     api.topAssets(network).then((d) => !cancelled && setTopAssets(d)).catch((e) => !cancelled && setTopAssetsError(e.message));
+    // Computed fresh per fetch (not once at module load) so "last 24h" stays
+    // actually true if this tab is left open for a while.
+    const recentOpsRange = defaultRange(24);
     api
-      .opsBreakdown(network, RECENT_OPS_RANGE.start, RECENT_OPS_RANGE.end)
+      .opsBreakdown(network, recentOpsRange.start, recentOpsRange.end)
       .then((d) => !cancelled && setRecentOps(d))
       .catch((e) => !cancelled && setRecentOpsError(e.message));
     return () => {
@@ -104,7 +124,7 @@ export default function Overview({ network }) {
   );
 
   const topAssetsByMarketCap = useMemo(
-    () => [...topAssets].filter((a) => a.marketCapUsd !== null).sort((a, b) => b.marketCapUsd - a.marketCapUsd).slice(0, 5),
+    () => (topAssets || []).filter((a) => a.marketCapUsd !== null).sort((a, b) => b.marketCapUsd - a.marketCapUsd).slice(0, 5),
     [topAssets]
   );
 
@@ -125,21 +145,23 @@ export default function Overview({ network }) {
       </div>
       {error && <div className="chart-state error">{error}</div>}
 
-      <h3 className="section-title">Recent Ledgers</h3>
-      <div className="ledger-stream">
-        {ledgers.map((l) => (
-          <div className="star-node" key={l.sequence}>
-            <div className="pip" />
-            <div className="seq">#{l.sequence.toLocaleString()}</div>
-            <div className="meta">{new Date(l.closedAt).toLocaleTimeString()}</div>
-            <div className="txcount">
-              {l.transactionCount} txs · {l.operationCount} ops
-            </div>
-          </div>
-        ))}
+      <h3 className="section-title">Network growth, last 24h</h3>
+      <p className="view-hint">
+        New accounts, funding, and trustline activity — see the Network Growth tab for the
+        full trend over a wider range.
+      </p>
+      <div className="stat-row">
+        <StatCard label="New accounts" value={recentOps ? recentOps.newAccountCount.toLocaleString() : null} />
+        <StatCard
+          label="XLM used to fund new accounts"
+          value={recentOps ? Number(recentOps.newAccountFundingXlm).toLocaleString(undefined, { maximumFractionDigits: 2 }) : null}
+        />
+        <StatCard label="Trustline changes" value={recentOps ? recentOps.newTrustlineCount.toLocaleString() : null} />
       </div>
+      {recentOpsError && <div className="chart-state error">{recentOpsError}</div>}
 
       <h3 className="section-title">Smart contract activity</h3>
+      {!contractsAllTime && !contractsAllTimeError && <div className="chart-state">Loading…</div>}
       {contractsAllTimeError && <div className="chart-state error">{contractsAllTimeError}</div>}
       {contractsAllTime && !contractsAllTime.available && (
         <div className="chart-state">{contractsAllTime.reason}</div>
@@ -164,7 +186,7 @@ export default function Overview({ network }) {
       )}
       {networkTradesError && <div className="chart-state error">{networkTradesError}</div>}
       {networkTrades && !networkTrades.available && <div className="chart-state">{networkTrades.reason}</div>}
-      {(topTradeFunctions.length > 0 || (!networkTrades && !networkTradesError)) && (
+      {(networkTrades?.available || (!networkTrades && !networkTradesError)) && (
         <ChartPanel
           title="Most-called trade functions, network-wide (all time)"
           loading={!networkTrades}
@@ -178,6 +200,7 @@ export default function Overview({ network }) {
       )}
 
       <h3 className="section-title">On-chain protocols</h3>
+      {!protocolsRanking && !protocolsRankingError && <div className="chart-state">Loading…</div>}
       {protocolsRankingError && <div className="chart-state error">{protocolsRankingError}</div>}
       {protocolsRanking && !protocolsRanking.available && (
         <div className="chart-state">{protocolsRanking.reason}</div>
@@ -212,20 +235,16 @@ export default function Overview({ network }) {
         xAngle={-40}
       />
 
-      {(topAssetsByMarketCap.length > 0 || topAssetsError) && (
-        <>
-          <h3 className="section-title">Top assets by market cap</h3>
-          <ChartPanel
-            title="Top 5 assets"
-            loading={topAssets.length === 0 && !topAssetsError}
-            error={topAssetsError}
-            data={topAssetsByMarketCap}
-            dataKey="marketCapUsd"
-            xKey="code"
-            kind="bar"
-          />
-        </>
-      )}
+      <h3 className="section-title">Top assets by market cap</h3>
+      <ChartPanel
+        title="Top 5 assets"
+        loading={!topAssets && !topAssetsError}
+        error={topAssetsError}
+        data={topAssetsByMarketCap}
+        dataKey="marketCapUsd"
+        xKey="code"
+        kind="bar"
+      />
     </div>
   );
 }

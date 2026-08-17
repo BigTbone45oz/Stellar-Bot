@@ -43,12 +43,6 @@ body{ margin:0; background:var(--bg); color:var(--text); font-family:var(--body)
 .stat-card-label{ font-family:var(--mono); font-size:11px; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-faint); }
 .stat-card-value{ font-family:var(--mono); font-size:18px; margin-top:4px; }
 
-.ledger-stream{ display:flex; gap:20px; overflow-x:auto; padding:12px 4px; }
-.star-node{ flex:0 0 auto; min-width:120px; }
-.star-node .pip{ width:8px; height:8px; border-radius:50%; background:var(--gold); margin-bottom:8px; }
-.star-node .seq{ font-family:var(--mono); font-weight:600; }
-.star-node .meta, .star-node .txcount{ font-family:var(--mono); font-size:11px; color:var(--text-faint); }
-
 .date-range-picker{ display:flex; gap:16px; flex-wrap:wrap; align-items:center; }
 .presets{ display:flex; gap:6px; }
 .presets button{ background:var(--bg-panel-raised); border:1px solid var(--line); color:var(--text-muted); padding:6px 10px; border-radius:5px; cursor:pointer; font-size:12px; }

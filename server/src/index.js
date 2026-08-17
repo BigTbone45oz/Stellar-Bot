@@ -11,6 +11,7 @@ import assetRoutes from './routes/assets.js';
 import tradeRoutes from './routes/trades.js';
 import contractRoutes from './routes/contracts.js';
 import protocolRoutes from './routes/protocols.js';
+import growthRoutes from './routes/growth.js';
 
 const app = express();
 
@@ -39,6 +40,7 @@ app.use('/api/assets', assetRoutes);
 app.use('/api/trades', tradeRoutes);
 app.use('/api/contracts', contractRoutes);
 app.use('/api/protocols', protocolRoutes);
+app.use('/api/growth', growthRoutes);
 
 app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
 
