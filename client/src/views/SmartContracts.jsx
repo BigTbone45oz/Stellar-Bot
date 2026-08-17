@@ -57,6 +57,14 @@ export default function SmartContracts({ network }) {
   const [protocolTrend, setProtocolTrend] = useState(null);
   const [protocolTrendLoading, setProtocolTrendLoading] = useState(false);
   const [protocolTrendError, setProtocolTrendError] = useState(null);
+  const [functionTrendSelection, setFunctionTrendSelection] = useState('');
+
+  // Options come from functionTotals (already sorted by call count), so the
+  // default selection is naturally the most-called function, not an arbitrary one.
+  const functionTrendOptions = useMemo(
+    () => (protocolTrend?.functionTotals || []).map((f) => f.name),
+    [protocolTrend]
+  );
 
   const sorobanRows = useMemo(() => {
     if (!breakdown) return [];
@@ -114,7 +122,11 @@ export default function SmartContracts({ network }) {
     setProtocolTrendError(null);
     api
       .contractsProtocolTrend(network)
-      .then((d) => !cancelled && setProtocolTrend(d))
+      .then((d) => {
+        if (cancelled) return;
+        setProtocolTrend(d);
+        setFunctionTrendSelection(d.available && d.functionTotals?.length > 0 ? d.functionTotals[0].name : '');
+      })
       .catch((e) => !cancelled && setProtocolTrendError(e.message))
       .finally(() => !cancelled && setProtocolTrendLoading(false));
     return () => {
@@ -192,12 +204,10 @@ export default function SmartContracts({ network }) {
 
       <h3 className="section-title">Soroswap usage over time</h3>
       <p className="view-hint">
-        Daily call volume since Soroswap's deployment (confirmed-Soroban contract addresses,
-        via Dune). Not yet extended to other Stellar "DEX" protocols — Aquarius, LumenSwap, and
-        Scopuly predate Soroban and run mostly or entirely on Stellar's classic protocol-level
-        DEX/liquidity pools, so mixing their activity in here would overstate genuine smart-contract
-        usage. This is call <em>volume</em>, not yet a breakdown of which specific function
-        (swap vs. add/remove liquidity) — that needs a follow-up query, see CLAUDE.md.
+        Since Soroswap's deployment (confirmed-Soroban contract addresses, via Dune). Not yet
+        extended to other Stellar "DEX" protocols — Aquarius, LumenSwap, and Scopuly predate
+        Soroban and run mostly or entirely on Stellar's classic protocol-level DEX/liquidity
+        pools, so mixing their activity in here would overstate genuine smart-contract usage.
       </p>
       {protocolTrendLoading && <div className="chart-state">Loading…</div>}
       {protocolTrendError && <div className="chart-state error">{protocolTrendError}</div>}
@@ -219,6 +229,58 @@ export default function SmartContracts({ network }) {
             xKey="day"
             kind="line"
           />
+
+          {functionTrendOptions.length > 0 && (
+            <>
+              <h4 className="subhead-label">What Soroswap is actually being called to do</h4>
+              <p className="view-hint">
+                Real decoded function names (not a heuristic guess) — the direct answer to "is
+                this trading, or something else." All-time totals below; pick one to see its own
+                trend over time.
+              </p>
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Function</th>
+                      <th>Calls, all time</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {protocolTrend.functionTotals.map((f) => (
+                      <tr key={f.name}>
+                        <td>{f.name}</td>
+                        <td>{f.callCount.toLocaleString()}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="search-row">
+                <select
+                  className="window-select"
+                  value={functionTrendSelection}
+                  onChange={(e) => setFunctionTrendSelection(e.target.value)}
+                >
+                  {functionTrendOptions.map((name) => (
+                    <option key={name} value={name}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <ChartPanel
+                title={`Daily calls — ${functionTrendSelection}`}
+                loading={protocolTrendLoading}
+                error={protocolTrendError}
+                data={protocolTrend.dailyByFunction[functionTrendSelection] || []}
+                dataKey="callCount"
+                xKey="day"
+                kind="line"
+              />
+            </>
+          )}
         </>
       )}
 

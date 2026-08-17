@@ -73,10 +73,29 @@ usage over time" sections just show as unavailable — everything else works fin
    group by 1, 2
    order by 1
    ```
+4. Optionally, also save this one for the real per-function breakdown (what
+   Soroswap is actually being called to do — swap vs. add/remove liquidity, etc.,
+   decoded from Dune's `parameters_decoded`, not a guess), and put its ID in
+   `DUNE_SOROSWAP_FUNCTIONS_QUERY_ID`:
+   ```sql
+   select
+     o.closed_at_date as day,
+     element_at(o.parameters_decoded, 2).value as function_name,
+     count(*) as call_count
+   from stellar.history_operations o
+   where o.type_string = 'invoke_host_function'
+     and o.function = 'HostFunctionTypeHostFunctionTypeInvokeContract'
+     and o.contract_id in (
+       'CA4HEQTL2WPEUYKYKCDOHCDNIV4QHNJ7EL4J4NQ6VADP7SYHVRYZ7AW2', -- Soroswap Factory
+       'CAG5LRYQ5JVEUI5TEID72EYOVX44TTUJT5BQR2J6J77FH65PCCFAJDDH'  -- Soroswap Router
+     )
+   group by 1, 2
+   order by 1
+   ```
 
-Both routes only ever read a saved query's latest cached result (free, no fresh
-execution triggered), cached server-side for hours — this won't burn through
-Dune's free-tier credits under normal use.
+All three routes only ever read a saved query's latest cached result (free, no
+fresh execution triggered), cached server-side for hours — this won't burn
+through Dune's free-tier credits under normal use.
 
 ### Optional: nothing else needed for DeFiLlama
 

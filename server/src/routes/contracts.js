@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { TransactionBuilder, Networks, Address, StrKey } from '@stellar/stellar-sdk';
-import { resolveNetwork, DUNE_QUERY_ID, DUNE_SOROSWAP_TREND_QUERY_ID } from '../config.js';
+import { resolveNetwork, DUNE_QUERY_ID, DUNE_SOROSWAP_TREND_QUERY_ID, DUNE_SOROSWAP_FUNCTIONS_QUERY_ID } from '../config.js';
 import { makeHorizonClient } from '../horizonClient.js';
 import { makeSorobanClient } from '../sorobanClient.js';
 import { ledgerSequenceForTimestamp, STELLAR_EXPERT_NETWORK } from '../ledgerTime.js';
@@ -101,18 +101,24 @@ router.get('/all-time', async (req, res, next) => {
 
 // Day-bucketed call-volume trend for a specific, confirmed-Soroban protocol —
 // "how often is this actually being used, and is that growing" over time, since
-// launch. Currently Soroswap only (contract addresses verified against its own
-// GitHub docs, filtered in the Dune query itself, not here). Deliberately NOT
+// launch — plus, now, a real per-function breakdown ("what are they actually
+// calling it to do", not just "a call happened"), both since Soroswap's launch.
+// Currently Soroswap only (contract addresses verified against its own GitHub
+// docs, filtered in the Dune queries themselves, not here). Deliberately NOT
 // extended to other DeFiLlama-listed Stellar "DEX" protocols yet — several of
 // them (Aquarius, LumenSwap, Scopuly) predate Soroban and run mostly or entirely
 // on Stellar's classic protocol-level DEX/liquidity pools, not smart contracts;
 // mixing that in would misrepresent this as "Soroban usage" when much of it isn't.
 //
-// Known gap, not yet fixed: the Dune query's `function` column only distinguishes
-// InvokeContract vs. CreateContract (the same high-level category Horizon already
-// exposes for free) — not the actual invoked function name (swap/add_liquidity/
-// etc.), which needs a follow-up query against `parameters_decoded`. What's
-// returned here is call *volume*, not a function-level breakdown yet.
+// The function-name breakdown comes from a second, separate Dune query against
+// `parameters_decoded` — Dune decodes each invoke_host_function op's parameters
+// as a ROW("type" varchar, "value" varchar) array; index 2's `.value` is the
+// invoked function's Symbol, per InvokeContractArgs' fixed struct field order
+// (contractAddress, functionName, args) — same fact this codebase's own
+// decodeInvokedFunctionName (payments.js) already relies on for raw XDR, just
+// decoded by Dune instead of by us. Verified live: real function names came
+// back (swap_exact_tokens_for_tokens, add_liquidity, remove_liquidity, ...),
+// not placeholders.
 router.get('/protocol-trend', async (req, res, next) => {
   try {
     const net = resolveNetwork(req.query.network);
@@ -123,7 +129,7 @@ router.get('/protocol-trend', async (req, res, next) => {
       return res.json({ available: false, reason: 'Dune isn\'t configured on the server (DUNE_API_KEY/DUNE_SOROSWAP_TREND_QUERY_ID).' });
     }
 
-    const data = await cached('contractsProtocolTrend:soroswap:pubnet', TTL.FINALIZED, async () => {
+    const data = await cached('contractsProtocolTrend:soroswap:pubnet:v2', TTL.FINALIZED, async () => {
       const rows = await fetchDuneQueryResults(DUNE_SOROSWAP_TREND_QUERY_ID);
 
       const byDay = new Map();
@@ -136,12 +142,33 @@ router.get('/protocol-trend', async (req, res, next) => {
 
       const daily = Array.from(byDay.values()).sort((a, b) => (a.day < b.day ? -1 : 1));
 
+      // Function-name breakdown is optional — the call-volume trend above still
+      // works even if this second query isn't configured, it just won't have a
+      // "what for" answer to go with the "how often" one.
+      let functionTotals = [];
+      let dailyByFunction = {};
+      if (duneConfigured(DUNE_SOROSWAP_FUNCTIONS_QUERY_ID)) {
+        const fnRows = await fetchDuneQueryResults(DUNE_SOROSWAP_FUNCTIONS_QUERY_ID);
+        const totals = new Map();
+        for (const r of fnRows) {
+          const name = r.function_name || 'unknown';
+          const count = Number(r.call_count) || 0;
+          totals.set(name, (totals.get(name) || 0) + count);
+          (dailyByFunction[name] ||= []).push({ day: r.day, callCount: count });
+        }
+        functionTotals = Array.from(totals.entries())
+          .map(([name, callCount]) => ({ name, callCount }))
+          .sort((a, b) => b.callCount - a.callCount);
+      }
+
       return {
         available: true,
         protocol: 'Soroswap',
         totalInvokeCalls: daily.reduce((sum, d) => sum + d.invokeCount, 0),
         totalPoolsCreated: daily.reduce((sum, d) => sum + d.createCount, 0),
         daily,
+        functionTotals,
+        dailyByFunction,
       };
     });
 
