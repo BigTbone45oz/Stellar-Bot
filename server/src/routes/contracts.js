@@ -1,6 +1,12 @@
 import { Router } from 'express';
 import { TransactionBuilder, Networks, Address, StrKey } from '@stellar/stellar-sdk';
-import { resolveNetwork, DUNE_QUERY_ID, DUNE_SOROSWAP_TREND_QUERY_ID, DUNE_SOROSWAP_FUNCTIONS_QUERY_ID } from '../config.js';
+import {
+  resolveNetwork,
+  DUNE_QUERY_ID,
+  DUNE_SOROSWAP_TREND_QUERY_ID,
+  DUNE_SOROSWAP_FUNCTIONS_QUERY_ID,
+  DUNE_NETWORK_TRADES_QUERY_ID,
+} from '../config.js';
 import { makeHorizonClient } from '../horizonClient.js';
 import { makeSorobanClient } from '../sorobanClient.js';
 import { ledgerSequenceForTimestamp, STELLAR_EXPERT_NETWORK } from '../ledgerTime.js';
@@ -167,6 +173,69 @@ router.get('/protocol-trend', async (req, res, next) => {
         totalInvokeCalls: daily.reduce((sum, d) => sum + d.invokeCount, 0),
         totalPoolsCreated: daily.reduce((sum, d) => sum + d.createCount, 0),
         daily,
+        functionTotals,
+        dailyByFunction,
+      };
+    });
+
+    res.json(data);
+  } catch (err) {
+    next(err);
+  }
+});
+
+const NETWORK_TRADES_TOP_N = 15;
+const NETWORK_TRADES_MIN_NAME_LEN = 3; // drops cryptic 1-2 char names (e.g. "s", "cm") — see below
+
+// Network-wide (every Soroban contract, not just known protocols) breakdown of
+// what function gets called when a real trade happens — "real" meaning the same
+// swap-detection signal payments.js already uses live (an operation that moved
+// 2+ distinct assets), just run via Dune against full history instead of a
+// live-Horizon date range. This is deliberately NOT protocol-labeled — we don't
+// have a mapping from contract_id to protocol name network-wide, only for the
+// handful (currently just Soroswap) we've manually verified — so this shows raw
+// function names, which include real noise: some contracts use cryptic 1-2
+// character names (filtered out below, ~2.7% of matched calls, verified
+// negligible), and at least one real result was a joke name ("yeet", the single
+// most-called function in the raw data). Truncated to the top 15 by call count
+// rather than shown in full (94 distinct names in the raw query) — verified live
+// that the top 10 alone cover ~94% of all matched calls, so this is a real
+// simplification, not a meaningful data loss.
+router.get('/network-trading-activity', async (req, res, next) => {
+  try {
+    const net = resolveNetwork(req.query.network);
+    if (net.key !== 'pubnet') {
+      return res.json({ available: false, reason: 'Network-wide trading activity is pubnet-only.' });
+    }
+    if (!duneConfigured(DUNE_NETWORK_TRADES_QUERY_ID)) {
+      return res.json({ available: false, reason: 'Dune isn\'t configured on the server (DUNE_API_KEY/DUNE_NETWORK_TRADES_QUERY_ID).' });
+    }
+
+    const data = await cached('contractsNetworkTradingActivity:pubnet', TTL.FINALIZED, async () => {
+      const rows = await fetchDuneQueryResults(DUNE_NETWORK_TRADES_QUERY_ID);
+
+      const totals = new Map();
+      const dailyRaw = new Map(); // name -> [{day, callCount}]
+      for (const r of rows) {
+        const name = r.function_name;
+        if (!name || name.length < NETWORK_TRADES_MIN_NAME_LEN) continue;
+        const count = Number(r.call_count) || 0;
+        totals.set(name, (totals.get(name) || 0) + count);
+        if (!dailyRaw.has(name)) dailyRaw.set(name, []);
+        dailyRaw.get(name).push({ day: r.day, callCount: count });
+      }
+
+      const functionTotals = Array.from(totals.entries())
+        .map(([name, callCount]) => ({ name, callCount }))
+        .sort((a, b) => b.callCount - a.callCount)
+        .slice(0, NETWORK_TRADES_TOP_N);
+
+      const dailyByFunction = {};
+      for (const f of functionTotals) dailyByFunction[f.name] = dailyRaw.get(f.name) || [];
+
+      return {
+        available: true,
+        totalMatchedCalls: Array.from(totals.values()).reduce((sum, c) => sum + c, 0),
         functionTotals,
         dailyByFunction,
       };

@@ -25,6 +25,7 @@ export const DUNE_API_KEY = process.env.DUNE_API_KEY || null;
 export const DUNE_QUERY_ID = process.env.DUNE_QUERY_ID || null;
 export const DUNE_SOROSWAP_TREND_QUERY_ID = process.env.DUNE_SOROSWAP_TREND_QUERY_ID || null;
 export const DUNE_SOROSWAP_FUNCTIONS_QUERY_ID = process.env.DUNE_SOROSWAP_FUNCTIONS_QUERY_ID || null;
+export const DUNE_NETWORK_TRADES_QUERY_ID = process.env.DUNE_NETWORK_TRADES_QUERY_ID || null;
 
 export function resolveNetwork(param) {
   const key = param === 'testnet' ? 'testnet' : 'pubnet';

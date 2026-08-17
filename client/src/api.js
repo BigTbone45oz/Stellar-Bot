@@ -26,5 +26,6 @@ export const api = {
   contractActivity: (network, id, start, end) => request(`/api/contracts/${id}/activity`, { network, start, end }),
   contractsAllTime: (network) => request('/api/contracts/all-time', { network }),
   contractsProtocolTrend: (network) => request('/api/contracts/protocol-trend', { network }),
+  contractsNetworkTradingActivity: (network) => request('/api/contracts/network-trading-activity', { network }),
   protocolsRanking: (network) => request('/api/protocols/ranking', { network }),
 };

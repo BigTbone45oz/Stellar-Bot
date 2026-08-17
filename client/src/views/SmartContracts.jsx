@@ -66,6 +66,18 @@ export default function SmartContracts({ network }) {
     [protocolTrend]
   );
 
+  // Network-wide (every Soroban contract, not just Soroswap) breakdown of real
+  // detected trades by function name — see contracts.js's /network-trading-activity.
+  const [networkTrades, setNetworkTrades] = useState(null);
+  const [networkTradesLoading, setNetworkTradesLoading] = useState(false);
+  const [networkTradesError, setNetworkTradesError] = useState(null);
+  const [networkTradeSelection, setNetworkTradeSelection] = useState('');
+
+  const networkTradeOptions = useMemo(
+    () => (networkTrades?.functionTotals || []).map((f) => f.name),
+    [networkTrades]
+  );
+
   const sorobanRows = useMemo(() => {
     if (!breakdown) return [];
     const rows = [];
@@ -129,6 +141,24 @@ export default function SmartContracts({ network }) {
       })
       .catch((e) => !cancelled && setProtocolTrendError(e.message))
       .finally(() => !cancelled && setProtocolTrendLoading(false));
+    return () => {
+      cancelled = true;
+    };
+  }, [network]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setNetworkTradesLoading(true);
+    setNetworkTradesError(null);
+    api
+      .contractsNetworkTradingActivity(network)
+      .then((d) => {
+        if (cancelled) return;
+        setNetworkTrades(d);
+        setNetworkTradeSelection(d.available && d.functionTotals?.length > 0 ? d.functionTotals[0].name : '');
+      })
+      .catch((e) => !cancelled && setNetworkTradesError(e.message))
+      .finally(() => !cancelled && setNetworkTradesLoading(false));
     return () => {
       cancelled = true;
     };
@@ -199,6 +229,77 @@ export default function SmartContracts({ network }) {
               </tbody>
             </table>
           </div>
+        </>
+      )}
+
+      <h3 className="section-title">Trading activity across all Soroban contracts</h3>
+      <p className="view-hint">
+        Network-wide, not scoped to any known protocol — every operation that actually moved 2+
+        distinct assets in one call (the same real, provable "this was a trade" signal used
+        elsewhere on this page, not a name-based guess), since Soroban's launch, via Dune.
+        Because this isn't scoped to contracts we've manually verified, function names aren't
+        labeled by protocol, and the raw data includes real noise — cryptic 1-2 character names
+        are filtered out (under 3% of matched calls), but some remaining names are still
+        uninformative out of context (one of the most-called functions network-wide is
+        literally named "yeet"). Top 15 shown; the top 10 alone cover ~94% of all matched calls.
+      </p>
+      {networkTradesLoading && <div className="chart-state">Loading…</div>}
+      {networkTradesError && <div className="chart-state error">{networkTradesError}</div>}
+      {!networkTradesLoading && !networkTradesError && networkTrades && !networkTrades.available && (
+        <div className="chart-state">{networkTrades.reason}</div>
+      )}
+      {!networkTradesLoading && networkTrades?.available && (
+        <>
+          <div className="stat-row">
+            <StatCard label="Matched trade calls, all time" value={networkTrades.totalMatchedCalls.toLocaleString()} />
+          </div>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Function</th>
+                  <th>Calls, all time</th>
+                </tr>
+              </thead>
+              <tbody>
+                {networkTrades.functionTotals.map((f, i) => (
+                  <tr key={f.name}>
+                    <td>{i + 1}</td>
+                    <td>{f.name}</td>
+                    <td>{f.callCount.toLocaleString()}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {networkTradeOptions.length > 0 && (
+            <>
+              <div className="search-row">
+                <select
+                  className="window-select"
+                  value={networkTradeSelection}
+                  onChange={(e) => setNetworkTradeSelection(e.target.value)}
+                >
+                  {networkTradeOptions.map((name) => (
+                    <option key={name} value={name}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <ChartPanel
+                title={`Daily calls — ${networkTradeSelection}`}
+                loading={networkTradesLoading}
+                error={networkTradesError}
+                data={networkTrades.dailyByFunction[networkTradeSelection] || []}
+                dataKey="callCount"
+                xKey="day"
+                kind="line"
+              />
+            </>
+          )}
         </>
       )}
 

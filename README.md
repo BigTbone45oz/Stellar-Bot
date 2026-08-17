@@ -92,8 +92,38 @@ usage over time" sections just show as unavailable — everything else works fin
    group by 1, 2
    order by 1
    ```
+5. Optionally, also save this one for a network-wide trading breakdown (every
+   Soroban contract, not just Soroswap — real detected trades only, via the
+   same "moved 2+ distinct assets" test used elsewhere in this app), and put
+   its ID in `DUNE_NETWORK_TRADES_QUERY_ID`. **This one is heavy — expect
+   roughly 15-20 minutes to actually execute** (a full-history join with no
+   contract scope), unlike the others above which run in a couple of minutes:
+   ```sql
+   with swap_ops as (
+     select operation_id
+     from stellar.history_effects
+     where type_string in ('account_credited', 'trustline_credited')
+     group by operation_id
+     having count(distinct coalesce(asset_code, 'XLM') || ':' || coalesce(asset_issuer, '')) >= 2
+   )
+   select
+     o.closed_at_date as day,
+     element_at(o.parameters_decoded, 2).value as function_name,
+     count(*) as call_count
+   from stellar.history_operations o
+   join swap_ops s on s.operation_id = o.id
+   where o.type_string = 'invoke_host_function'
+     and o.function = 'HostFunctionTypeHostFunctionTypeInvokeContract'
+   group by 1, 2
+   order by 1
+   ```
+   Since this isn't scoped to a known protocol, results aren't labeled by which
+   protocol they belong to, and the raw function names include some noise —
+   see `CLAUDE.md`'s "Third-party data integrations" section (if you have it
+   locally — it's not tracked in this repo) or the code comments in
+   `contracts.js`'s `/network-trading-activity` route for the details.
 
-All three routes only ever read a saved query's latest cached result (free, no
+All four routes only ever read a saved query's latest cached result (free, no
 fresh execution triggered), cached server-side for hours — this won't burn
 through Dune's free-tier credits under normal use.
 
