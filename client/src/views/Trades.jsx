@@ -22,6 +22,10 @@ export default function Trades({ network }) {
     setTrades([]);
     setError(null);
     setLoaded(false);
+    // A load() in flight when the switch happens has its id invalidated
+    // above, so its own `finally` guard will never clear `loading` — clear
+    // it here instead, or "Loading…" persists on the new network forever.
+    setLoading(false);
   }, [network]);
 
   async function load() {

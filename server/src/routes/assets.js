@@ -3,9 +3,9 @@ import { resolveNetwork } from '../config.js';
 import { makeHorizonClient } from '../horizonClient.js';
 import { cached, TTL, ttlForRange } from '../cache.js';
 import { parseDateRange } from '../validate.js';
-import { httpError } from '../httpError.js';
 import { STELLAR_EXPERT_NETWORK } from '../ledgerTime.js';
 import { STELLAR_EXPERT_URL } from '../config.js';
+import { fetchJsonOrThrow, fetchTextOrNull } from '../fetchWithTimeout.js';
 
 const router = Router();
 const ISSUER_RE = /^G[A-Z2-7]{55}$/;
@@ -28,19 +28,7 @@ function parseAssetId(assetId) {
 
 async function fetchStellarExpertAssetPage(expertNetwork, cursor) {
   const url = `${STELLAR_EXPERT_URL}/explorer/${expertNetwork}/asset?sort=rating&order=desc&limit=${TOP_ASSETS_PAGE_SIZE}&cursor=${cursor}`;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 8000);
-  try {
-    const res = await fetch(url, { headers: { Accept: 'application/json' }, signal: controller.signal });
-    if (!res.ok) throw httpError(502, `StellarExpert asset lookup failed (${res.status})`);
-    return await res.json();
-  } catch (err) {
-    if (err.name === 'AbortError') throw httpError(504, `StellarExpert asset lookup timed out after 8000ms`);
-    if (err.status) throw err;
-    throw httpError(502, `StellarExpert asset lookup failed: ${err.message}`);
-  } finally {
-    clearTimeout(timer);
-  }
+  return fetchJsonOrThrow(url, { timeoutMs: 8000, headers: { Accept: 'application/json' }, label: 'StellarExpert asset lookup' });
 }
 
 // SEP-1 stellar.toml CURRENCIES blocks look like:
@@ -53,24 +41,16 @@ async function fetchStellarExpertAssetPage(expertNetwork, cursor) {
 const CURRENCY_BLOCK_RE = /\[\[CURRENCIES\]\]([\s\S]*?)(?=\[\[CURRENCIES\]\]|\n\[|$)/g;
 
 async function fetchTomlAssetName(domain, code, issuer) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 5000);
-  try {
-    const res = await fetch(`https://${domain}/.well-known/stellar.toml`, { signal: controller.signal });
-    if (!res.ok) return null;
-    const text = await res.text();
-    for (const m of text.matchAll(CURRENCY_BLOCK_RE)) {
-      const block = m[1];
-      if (block.match(/code\s*=\s*"([^"]+)"/)?.[1] !== code) continue;
-      if (block.match(/issuer\s*=\s*"([^"]+)"/)?.[1] !== issuer) continue;
-      return block.match(/\bname\s*=\s*"([^"]*)"/)?.[1] || null;
-    }
-    return null;
-  } catch {
-    return null; // unreachable domain, no toml, malformed toml — name just stays unknown
-  } finally {
-    clearTimeout(timer);
+  // unreachable domain, no toml, malformed toml — name just stays unknown
+  const text = await fetchTextOrNull(`https://${domain}/.well-known/stellar.toml`);
+  if (!text) return null;
+  for (const m of text.matchAll(CURRENCY_BLOCK_RE)) {
+    const block = m[1];
+    if (block.match(/code\s*=\s*"([^"]+)"/)?.[1] !== code) continue;
+    if (block.match(/issuer\s*=\s*"([^"]+)"/)?.[1] !== issuer) continue;
+    return block.match(/\bname\s*=\s*"([^"]*)"/)?.[1] || null;
   }
+  return null;
 }
 
 // XLM can't be paired against itself, so Horizon's order_book/trade_aggregations
@@ -380,37 +360,61 @@ router.get('/price-history', async (req, res, next) => {
       // the client if the real range needed more. Reachable in practice: at the
       // default 1-day resolution, any range over ~200 days (well within
       // MAX_RANGE_MS's ~366-day cap, and reachable via the manual date inputs on
-      // this view) silently dropped the remainder. Now pages forward using each
-      // batch's last bucket as the next start_time, same shape as this codebase's
-      // other range-fetching routes, with an explicit `truncated` flag instead of
-      // a silent cutoff. RECORDS_CAP is a safety valve for pathological
-      // combinations (e.g. 1-minute resolution over a near-year-long range), not
-      // an expected ceiling for normal use.
+      // this view) silently dropped the remainder.
+      //
+      // Unlike Horizon's cursor-based collections, trade_aggregations has real
+      // start/end filtering, so (unlike rangeFetch.js's ledger-cursor chunking)
+      // the full set of chunk windows is knowable up front from
+      // startMs/endMs/resolutionMs — chunks don't depend on each other's
+      // results, so they're fetched with a bounded-concurrency worker pool
+      // instead of one-at-a-time, same total request count but far less
+      // wall-clock time on wide ranges. RECORDS_CAP is a safety valve for
+      // pathological combinations (e.g. 1-minute resolution over a
+      // near-year-long range), not an expected ceiling for normal use.
+      const PAGE_LIMIT = 200;
       const RECORDS_CAP = 5000;
-      const records = [];
-      let truncated = false;
-      let nextStartMs = startMs;
-      while (nextStartMs < endMs) {
-        const page = await horizon.get('/trade_aggregations', {
-          base_asset_type: 'native',
-          counter_asset_type: code.length > 4 ? 'credit_alphanum12' : 'credit_alphanum4',
-          counter_asset_code: code,
-          counter_asset_issuer: issuer,
-          start_time: nextStartMs,
-          end_time: endMs,
-          resolution: resolutionMs,
-          order: 'asc',
-          limit: 200,
-        });
-        const batch = page._embedded.records;
-        if (batch.length === 0) break;
-        records.push(...batch);
-        if (records.length >= RECORDS_CAP) {
-          truncated = true;
-          break;
+      const chunkSpanMs = PAGE_LIMIT * resolutionMs;
+      const chunkBounds = [];
+      for (let chunkStart = startMs; chunkStart < endMs; chunkStart += chunkSpanMs) {
+        chunkBounds.push([chunkStart, Math.min(chunkStart + chunkSpanMs, endMs)]);
+      }
+      // Each chunk yields at most PAGE_LIMIT records, so capping the number of
+      // chunks claimed bounds both the returned size AND the actual number of
+      // Horizon requests made — unlike a post-hoc array slice, this stops a
+      // pathological combination (e.g. 1-minute resolution over a near-year
+      // range, ~2,600 chunks) from firing thousands of requests just to throw
+      // most of the results away. Same "cap chunks claimed, mark truncated if
+      // any remain unclaimed" shape as rangeFetch.js's worker pool.
+      const maxChunks = Math.ceil(RECORDS_CAP / PAGE_LIMIT);
+
+      const chunkResults = new Array(chunkBounds.length);
+      let nextChunk = 0;
+      async function worker() {
+        while (nextChunk < chunkBounds.length && nextChunk < maxChunks) {
+          const i = nextChunk++;
+          const [chunkStart, chunkEnd] = chunkBounds[i];
+          const page = await horizon.get('/trade_aggregations', {
+            base_asset_type: 'native',
+            counter_asset_type: code.length > 4 ? 'credit_alphanum12' : 'credit_alphanum4',
+            counter_asset_code: code,
+            counter_asset_issuer: issuer,
+            start_time: chunkStart,
+            end_time: chunkEnd,
+            resolution: resolutionMs,
+            order: 'asc',
+            limit: PAGE_LIMIT,
+          });
+          chunkResults[i] = page._embedded.records;
         }
-        if (batch.length < 200) break; // short page — that was the last of it
-        nextStartMs = Number(batch[batch.length - 1].timestamp) + resolutionMs;
+      }
+      const workerCount = Math.min(6, chunkBounds.length, maxChunks) || 1;
+      await Promise.all(Array.from({ length: workerCount }, worker));
+
+      const records = chunkResults.flat().filter(Boolean);
+      let truncated = nextChunk < chunkBounds.length;
+      if (records.length > RECORDS_CAP) {
+        records.length = RECORDS_CAP;
+        truncated = true;
       }
 
       return {

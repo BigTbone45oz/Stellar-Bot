@@ -43,7 +43,7 @@ export default function LedgersTransactions({ network }) {
   return (
     <div className="view">
       <DateRangePicker start={range.start} end={range.end} onChange={setRange} presets={LEDGER_RANGE_PRESETS} />
-      {data?.truncated && (
+      {!loading && data?.truncated && (
         <div className="chart-note-banner">
           Range is large — showing the first portion fetched. Narrow the range for a complete picture.
         </div>

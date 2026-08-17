@@ -40,6 +40,7 @@ export default function Protocols({ network }) {
     let cancelled = false;
     setLoading(true);
     setError(null);
+    setTrendSelection(TOTAL_OPTION);
     api
       .protocolsRanking(network)
       .then((d) => !cancelled && setData(d))
@@ -49,6 +50,17 @@ export default function Protocols({ network }) {
       cancelled = true;
     };
   }, [network]);
+
+  // If the fetched protocol list no longer contains the currently-selected
+  // protocol (network switch, or DeFiLlama's tracked set shifting between
+  // fetches), fall back to the total rather than leaving the <select> pointed
+  // at an option that no longer exists (which silently shows an empty chart
+  // labeled with a stale protocol name).
+  useEffect(() => {
+    if (trendSelection !== TOTAL_OPTION && !trendOptions.includes(trendSelection)) {
+      setTrendSelection(TOTAL_OPTION);
+    }
+  }, [trendOptions, trendSelection]);
 
   return (
     <div className="view">

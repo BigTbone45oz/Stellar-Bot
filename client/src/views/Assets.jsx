@@ -129,6 +129,13 @@ export default function Assets({ network }) {
     setTopError(null);
     setPage(0);
     setDetails({});
+    // Without this, the previous network's top-100 table stayed fully
+    // rendered underneath the "Loading…" state until the new fetch
+    // resolved — and the per-page detail effect below (keyed on
+    // [network, pageAssets, volumeWindow]) would immediately re-fire using
+    // the new network but the still-stale pageAssets, querying the new
+    // network's Horizon with the old network's asset identifiers.
+    setTopAssets([]);
     // These weren't reset on network change before — a code search or expanded
     // asset from the previous network stayed on screen with nothing indicating
     // it belonged to a different network than the one now selected. Worse for
@@ -271,7 +278,7 @@ export default function Assets({ network }) {
               <>
                 <span className="subhead-label">Price &amp; volume history</span>
                 <DateRangePicker start={range.start} end={range.end} onChange={setRange} />
-                {historyTruncated && (
+                {!loading && historyTruncated && (
                   <div className="chart-note-banner">
                     Range is large — showing the first portion fetched. Narrow the range or use a
                     coarser resolution for a complete picture.
@@ -319,7 +326,7 @@ export default function Assets({ network }) {
       {topLoading && <div className="chart-state">Loading top assets…</div>}
       {topError && <div className="chart-state error">{topError}</div>}
 
-      {pageAssets.length > 0 && (
+      {!topLoading && pageAssets.length > 0 && (
         <>
           <div className="table-wrap">
             <table className="assets-table">
@@ -432,7 +439,7 @@ export default function Assets({ network }) {
         <>
           <h3 className="section-title">{expanded.code} / XLM — price &amp; volume</h3>
           <DateRangePicker start={range.start} end={range.end} onChange={setRange} />
-          {historyTruncated && (
+          {!loading && historyTruncated && (
             <div className="chart-note-banner">
               Range is large — showing the first portion fetched. Narrow the range or use a
               coarser resolution for a complete picture.

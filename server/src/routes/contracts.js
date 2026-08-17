@@ -256,22 +256,37 @@ router.get('/:id/activity', async (req, res, next) => {
     const { start, end, startMs, endMs } = parseDateRange(req.query);
     const net = resolveNetwork(req.query.network);
     const horizon = makeHorizonClient(net.horizon);
-    const retentionCutoffMs = Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000;
+    // Floored to the nearest 10 minutes so this value (unlike start/end, which
+    // parseDateRange already floors to the minute) doesn't defeat
+    // ledgerSequenceForTimestamp's cache with a fresh millisecond-precision key
+    // on every single request — RETENTION_DAYS is already a documented safety
+    // margin, so a few minutes of slop here is immaterial.
+    const TEN_MIN_MS = 10 * 60 * 1000;
+    const retentionCutoffMs =
+      Math.floor((Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000) / TEN_MIN_MS) * TEN_MIN_MS;
 
     const cacheKey = `contractActivity:${net.key}:${id}:${start}:${end}`;
     const data = await cached(cacheKey, ttlForRange(endMs), async () => {
-      const segments = [];
-
-      if (endMs >= retentionCutoffMs) {
-        // Portion of the range that's within RPC retention.
-        const eventsStart = Math.max(startMs, retentionCutoffMs);
-        segments.push(await fetchViaRpcEvents(net, horizon, id, eventsStart, endMs));
-      }
-      if (startMs < retentionCutoffMs) {
-        // Portion of the range older than retention.
-        const fallbackEnd = new Date(Math.min(endMs, retentionCutoffMs)).toISOString();
-        segments.push(await fetchViaHorizonFallback(horizon, net.key, id, start, fallbackEnd, passphraseFor(net.key)));
-      }
+      // The two segments below hit independent upstreams (Soroban RPC vs.
+      // Horizon) and don't depend on each other — run concurrently rather
+      // than sequentially, same as every other independent-lookup pair in
+      // this codebase.
+      const [eventsSegment, fallbackSegment] = await Promise.all([
+        endMs >= retentionCutoffMs
+          ? fetchViaRpcEvents(net, horizon, id, Math.max(startMs, retentionCutoffMs), endMs)
+          : null,
+        startMs < retentionCutoffMs
+          ? fetchViaHorizonFallback(
+              horizon,
+              net.key,
+              id,
+              start,
+              new Date(Math.min(endMs, retentionCutoffMs)).toISOString(),
+              passphraseFor(net.key)
+            )
+          : null,
+      ]);
+      const segments = [eventsSegment, fallbackSegment].filter(Boolean);
 
       return { segments };
     });

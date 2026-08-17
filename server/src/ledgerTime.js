@@ -1,5 +1,6 @@
 import { cached, ttlForRange, TTL } from './cache.js';
 import { STELLAR_EXPERT_URL } from './config.js';
+import { fetchJsonOrNull } from './fetchWithTimeout.js';
 
 // StellarExpert's network naming differs from ours ('pubnet' here vs their 'public').
 // Exported so other routes hitting the StellarExpert API (e.g. assets.js's /top) reuse
@@ -42,33 +43,28 @@ async function resolveViaStellarExpert(networkKey, targetMs) {
 
   const timestampSec = Math.floor(targetMs / 1000);
   const url = `${STELLAR_EXPERT_URL}/explorer/${network}/ledger/sequence-from-timestamp?timestamp=${timestampSec}`;
-  const controller = new AbortController();
   // Short timeout: this is a "try fast, fall back otherwise" path, not the
   // primary source of truth, so it shouldn't hold up the request for long.
-  const timer = setTimeout(() => controller.abort(), 4000);
-  try {
-    const res = await fetch(url, { headers: { Accept: 'application/json' }, signal: controller.signal });
-    if (!res.ok) return null; // 404 (out of range) or 429 (rate limited) — fall back
-    const data = await res.json();
-    return Number.isFinite(data.sequence) ? data.sequence : null;
-  } catch {
-    return null; // network error, timeout, malformed response — fall back
-  } finally {
-    clearTimeout(timer);
-  }
+  // Any failure (404 out of range, 429 rate limited, network error, timeout,
+  // malformed response) falls back to the binary search — see the caller.
+  const data = await fetchJsonOrNull(url, { timeoutMs: 4000, headers: { Accept: 'application/json' } });
+  return Number.isFinite(data?.sequence) ? data.sequence : null;
 }
 
 async function resolveViaBinarySearch(horizon, targetMs) {
   const root = await horizon.get('/');
-  let lo = await earliestAvailableLedger(horizon);
   let hi = root.history_latest_ledger;
 
   // Guard rails: if the target is before the earliest retained ledger or after
-  // latest, clamp rather than binary-searching into 404s. The latest ledger's
-  // close time is already in `root` — no need for a separate request for it.
+  // latest, clamp rather than binary-searching into 404s. Both bounds' values
+  // are already present in `root` (history_latest_ledger_closed_at and
+  // history_elder_ledger — the earliest ledger this Horizon instance actually
+  // retains, since not every instance keeps full history from ledger 1) — no
+  // need for a separate request to compute either one.
   const latest = new Date(root.history_latest_ledger_closed_at).getTime();
   if (targetMs >= latest) return hi;
 
+  let lo = root.history_elder_ledger;
   const first = await getLedgerClosedAt(horizon, lo);
   if (targetMs <= first) return lo;
 
@@ -91,28 +87,5 @@ async function getLedgerClosedAt(horizon, sequence) {
   return cached(cacheKey, TTL.FINALIZED, async () => {
     const ledger = await horizon.get(`/ledgers/${sequence}`);
     return new Date(ledger.closed_at).getTime();
-  });
-}
-
-/**
- * Not every Horizon instance retains full history from ledger 1 — some public
- * nodes prune older ledgers. Rather than assuming ledger 2 always exists (which
- * threw a 404 on any Horizon with partial retention), ask Horizon what its
- * earliest ledger actually is via the oldest page of /ledgers.
- */
-async function earliestAvailableLedger(horizon) {
-  const cacheKey = `earliestLedger:${horizon.baseUrl}`;
-  return cached(cacheKey, TTL.FINALIZED, async () => {
-    // No try/catch here on purpose: a real failure (timeout, 5xx, network error)
-    // on this basic, always-answerable query is a genuine upstream problem, not
-    // evidence ledger 2 doesn't exist — swallowing it and returning 2 unconditionally
-    // would reintroduce the exact "assume ledger 2 exists" bug this function was
-    // written to fix, just one layer removed (a transient failure here would still
-    // end up calling getLedgerClosedAt(horizon, 2), 404ing on any instance that's
-    // actually pruned it). Let it propagate as the normal, already-handled
-    // timeout/HorizonError instead. The `|| 2` below is only a defensive default for
-    // a genuinely empty (but successful) response, not error handling.
-    const page = await horizon.get('/ledgers', { order: 'asc', limit: 1 });
-    return page._embedded.records[0]?.sequence || 2;
   });
 }

@@ -20,7 +20,11 @@ export default function DateRangePicker({ start, end, onChange, presets = DEFAUL
   }
 
   function updateEnd(value) {
-    const newEnd = new Date(value).toISOString();
+    // Treat the picked day as running through its own end, not its start —
+    // otherwise picking the same calendar day for both "From" and "To" (a
+    // completely natural way to ask "show me all of today") produces a
+    // zero-width instant instead of a full day.
+    const newEnd = new Date(`${value}T23:59:59.999Z`).toISOString();
     onChange({ start: newEnd < start ? newEnd : start, end: newEnd });
   }
 

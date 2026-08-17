@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { cached, TTL } from '../cache.js';
-import { httpError } from '../httpError.js';
+import { fetchJsonOrThrow } from '../fetchWithTimeout.js';
 
 const router = Router();
 
@@ -33,20 +33,8 @@ const TREND_DAYS = 180;
 // much less interesting question than the one this page is answering.
 const EXCLUDED_CATEGORIES = new Set(['CEX']);
 
-async function fetchJson(url, timeoutMs = 10_000) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const res = await fetch(url, { headers: { Accept: 'application/json' }, signal: controller.signal });
-    if (!res.ok) throw httpError(502, `DeFiLlama request failed (${res.status})`);
-    return await res.json();
-  } catch (err) {
-    if (err.name === 'AbortError') throw httpError(504, `DeFiLlama request to ${url} timed out after ${timeoutMs}ms`);
-    if (err.status) throw err;
-    throw httpError(502, `DeFiLlama request failed: ${err.message}`);
-  } finally {
-    clearTimeout(timer);
-  }
+function fetchJson(url, timeoutMs = 10_000) {
+  return fetchJsonOrThrow(url, { timeoutMs, headers: { Accept: 'application/json' }, label: 'DeFiLlama request' });
 }
 
 // DeFiLlama has no per-chain protocol-TVL endpoint, so /protocols returns every
@@ -65,13 +53,32 @@ router.get('/ranking', async (req, res, next) => {
         fetchJson(DEX_VOLUME_URL),
       ]);
 
+      // Joined by name — NOT by DeFiLlama's `parentProtocol` field. That field
+      // groups multiple genuinely DIFFERENT products under one shared parent
+      // (e.g. Blend Pools, Blend Pools V2, Blend Backstop, and Blend Backstop
+      // V2 all share `parent#blend` despite being four distinct products) — an
+      // earlier version of this route joined by parentProtocol and silently
+      // collapsed all four into a single row, losing three real, distinct
+      // protocols from the ranking. Name is the right join key for the common
+      // case (verified live: Soroswap, Scopuly, Aquarius Stellar, and the four
+      // Blend products all match cleanly by name across both endpoints).
+      //
+      // The one confirmed exception: DeFiLlama lists the same underlying
+      // Allbridge product under "Allbridge Core" in /protocols but
+      // "Allbridge Classic" in /overview/dexs/stellar — a real cross-endpoint
+      // naming inconsistency for one specific protocol, not a general pattern,
+      // so it's handled with an explicit alias rather than a blanket join key
+      // that would risk merging unrelated same-parent products again.
+      const NAME_ALIASES = { 'Allbridge Classic': 'Allbridge Core' };
+      const canonicalName = (name) => NAME_ALIASES[name] || name;
+
       const byName = new Map();
 
       for (const p of allProtocols) {
         if (!Array.isArray(p.chains) || !p.chains.includes('Stellar')) continue;
         if (EXCLUDED_CATEGORIES.has(p.category)) continue;
-        byName.set(p.name, {
-          name: p.name,
+        byName.set(canonicalName(p.name), {
+          name: canonicalName(p.name),
           category: p.category || null,
           logo: p.logo || null,
           tvlUsd: typeof p.chainTvls?.Stellar === 'number' ? p.chainTvls.Stellar : null,
@@ -83,15 +90,17 @@ router.get('/ranking', async (req, res, next) => {
       }
 
       // Volume entries can name a protocol /protocols didn't (or vice versa) —
-      // merge by name rather than assuming the two lists line up. Re-applying the
-      // CEX exclusion here too: this loop used to unconditionally set into byName,
-      // which meant a CEX-category protocol absent from (or filtered out of) the
-      // TVL loop above could still get inserted via its DEX-volume entry — a real
-      // bug that defeated the exclusion for exactly the rows it existed to catch.
+      // merge by (aliased) name rather than assuming the two lists line up.
+      // Re-applying the CEX exclusion here too: this loop used to unconditionally
+      // set into the map, which meant a CEX-category protocol absent from (or
+      // filtered out of) the TVL loop above could still get inserted via its
+      // DEX-volume entry — a real bug that defeated the exclusion for exactly
+      // the rows it existed to catch.
       for (const p of dexOverview.protocols || []) {
         if (EXCLUDED_CATEGORIES.has(p.category)) continue;
-        const existing = byName.get(p.name) || {
-          name: p.name,
+        const key = canonicalName(p.name);
+        const existing = byName.get(key) || {
+          name: key,
           category: p.category || null,
           logo: p.logo || null,
           tvlUsd: null,
@@ -104,7 +113,7 @@ router.get('/ranking', async (req, res, next) => {
         existing.volume7dUsd = typeof p.total7d === 'number' ? p.total7d : null;
         existing.volumeAllTimeUsd = typeof p.totalAllTime === 'number' ? p.totalAllTime : null;
         existing.change1d = typeof p.change_1d === 'number' ? p.change_1d : null;
-        byName.set(p.name, existing);
+        byName.set(key, existing);
       }
 
       const protocols = Array.from(byName.values()).sort((a, b) => {
@@ -127,14 +136,20 @@ router.get('/ranking', async (req, res, next) => {
         .map(([ts, usd]) => ({ day: new Date(ts * 1000).toISOString().slice(0, 10), volumeUsd: usd }));
 
       // Same daily series, split per protocol instead of summed — only kept for
-      // names that survived the CEX filter above, so a selector built from this
-      // can't offer a protocol that isn't in the ranking table.
+      // protocols that survived the CEX filter above, so a selector built from
+      // this can't offer a protocol that isn't in the ranking table.
+      //
+      // totalDataChartBreakdown keys its entries by dexOverview's own raw names
+      // (e.g. "Allbridge Classic"), which the alias map above renames to match
+      // the ranking table's canonical name ("Allbridge Core") — same alias
+      // lookup, so trend data isn't silently dropped for that one protocol.
       const rankedNames = new Set(protocols.map((p) => p.name));
       const volumeTrendByProtocol = {};
       for (const [ts, byProtocolUsd] of dexOverview.totalDataChartBreakdown || []) {
         if (ts < cutoffSec) continue;
         const day = new Date(ts * 1000).toISOString().slice(0, 10);
-        for (const [name, usd] of Object.entries(byProtocolUsd || {})) {
+        for (const [rawName, usd] of Object.entries(byProtocolUsd || {})) {
+          const name = canonicalName(rawName);
           if (!rankedNames.has(name)) continue;
           (volumeTrendByProtocol[name] ||= []).push({ day, volumeUsd: usd });
         }

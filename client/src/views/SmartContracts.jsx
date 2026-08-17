@@ -165,10 +165,20 @@ export default function SmartContracts({ network }) {
   }, [network]);
 
   useEffect(() => {
-    if (!/^C[A-Z2-7]{55}$/.test(contractId)) return;
+    if (!/^C[A-Z2-7]{55}$/.test(contractId)) {
+      // Not just "don't fetch" — an edit that moves the input away from a
+      // previously-valid id (fixing a typo, clearing the box) must also drop
+      // whatever the last valid lookup rendered, or it stays on screen
+      // silently mislabeled against the now-different input.
+      setData(null);
+      setError(null);
+      setLoading(false);
+      return;
+    }
     let cancelled = false;
     setLoading(true);
     setError(null);
+    setData(null);
     api
       .contractActivity(network, contractId, range.start, range.end)
       .then((d) => !cancelled && setData(d))
@@ -400,13 +410,13 @@ export default function SmartContracts({ network }) {
         onChange={setBreakdownRange}
         presets={OPS_BREAKDOWN_RANGE_PRESETS}
       />
-      {breakdown?.truncated && (
+      {!breakdownLoading && breakdown?.truncated && (
         <div className="chart-note-banner">
           Range is large — showing the first portion fetched. Narrow the range for a complete picture.
         </div>
       )}
 
-      {(breakdown?.assetMovement?.length ?? 0) > 0 && (
+      {!breakdownLoading && (breakdown?.assetMovement?.length ?? 0) > 0 && (
         <>
           <div className="stat-row">
             <StatCard label="Total moved (USD)" value={formatUsd(breakdown.totalMovedUsd)} />
@@ -453,7 +463,7 @@ export default function SmartContracts({ network }) {
         </>
       )}
 
-      {(breakdown?.movementByType?.length ?? 0) > 0 && (
+      {!breakdownLoading && (breakdown?.movementByType?.length ?? 0) > 0 && (
         <div className="table-wrap">
           <table>
             <thead>
@@ -488,7 +498,7 @@ export default function SmartContracts({ network }) {
         Contract calls that moved 2+ different assets at once in the same operation — the clearest
         available proof of an actual swap/trade happening through a contract.
       </p>
-      {(breakdown?.swaps?.length ?? 0) > 0 ? (
+      {!breakdownLoading && (breakdown?.swaps?.length ?? 0) > 0 ? (
         <ul className="tx-list">
           {breakdown.swaps.map((s) => (
             <li key={s.id}>
@@ -520,7 +530,7 @@ export default function SmartContracts({ network }) {
         kind="bar"
         xAngle={-30}
       />
-      {sorobanRows.length > 0 && (
+      {!breakdownLoading && sorobanRows.length > 0 && (
         <div className="table-wrap">
           <table>
             <thead>
@@ -561,7 +571,7 @@ export default function SmartContracts({ network }) {
         kind="bar"
         xAngle={-30}
       />
-      {invokedFunctionRows.length > 0 && (
+      {!breakdownLoading && invokedFunctionRows.length > 0 && (
         <div className="table-wrap">
           <table>
             <thead>
@@ -607,7 +617,7 @@ export default function SmartContracts({ network }) {
       {loading && <div className="chart-state">Loading…</div>}
       {error && <div className="chart-state error">{error}</div>}
 
-      {data && (
+      {!loading && data && (
         <>
           {/* A range can straddle the RPC retention window, so the API returns one
               segment per data source rather than forcing a single mode for the whole range. */}

@@ -25,6 +25,11 @@ export default function Accounts({ network }) {
     requestIdRef.current += 1; // invalidate any in-flight lookup from before the switch
     setAccount(null);
     setError(null);
+    // A lookup that was in flight at the moment of the switch has its id
+    // invalidated above, so its own `finally` will never clear `loading`
+    // (that check is what "superseded" means) — clear it here instead, or
+    // the spinner stays on screen indefinitely on the new network.
+    setLoading(false);
   }, [network]);
 
   async function lookup(id) {
@@ -95,7 +100,8 @@ export default function Accounts({ network }) {
                   {p.to === account.id ? 'received from' : 'sent to'} {(p.to === account.id ? p.from : p.to)?.slice(0, 6)}…
                 </span>
                 <span>
-                  {p.amount ? `${p.amount} ${p.assetCode || 'XLM'}` : operationTypeLabel(p.type)} ·{' '}
+                  {p.amount ? `${p.amount} ${p.assetCode || 'XLM'}` : operationTypeLabel(p.type)}
+                  {p.assetIssuer && ` (${p.assetIssuer.slice(0, 6)}…)`} ·{' '}
                   {new Date(p.createdAt).toLocaleString()}
                 </span>
               </li>
