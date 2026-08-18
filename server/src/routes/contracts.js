@@ -6,6 +6,7 @@ import {
   DUNE_SOROSWAP_TREND_QUERY_ID,
   DUNE_SOROSWAP_FUNCTIONS_QUERY_ID,
   DUNE_NETWORK_TRADES_QUERY_ID,
+  DUNE_PROTOCOL_FUNCTIONS_QUERY_ID,
 } from '../config.js';
 import { makeHorizonClient } from '../horizonClient.js';
 import { makeSorobanClient } from '../sorobanClient.js';
@@ -239,6 +240,67 @@ router.get('/network-trading-activity', async (req, res, next) => {
         functionTotals,
         dailyByFunction,
       };
+    });
+
+    res.json(data);
+  } catch (err) {
+    next(err);
+  }
+});
+
+const PROTOCOL_FUNCTIONS_TOP_N = 15; // per protocol, same display-scope cap as network-trading-activity
+
+// Real per-function call breakdown for a handful of manually-verified protocols
+// beyond just Soroswap — "what are people actually using each one for, and how
+// often." Deliberately NOT filtered by the "moved 2+ distinct assets" swap
+// signal used elsewhere (network-trading-activity, payments.js's swap
+// detection): that filter is right for finding trades, but several of these
+// protocols aren't DEXs — Blend is a lending market, where a real, meaningful
+// call (supply/borrow/repay) moves exactly one asset, not two, and would be
+// invisible to a swap filter. This route answers "how is it used" generally,
+// same shape as /protocol-trend's Soroswap-only function breakdown, just
+// covering more protocols in one query via a contract-address-to-protocol-name
+// lookup built from StellarExpert's Directory API (see CLAUDE.md's "Verified
+// facts" section) rather than hand-verified addresses per protocol.
+router.get('/protocol-functions', async (req, res, next) => {
+  try {
+    const net = resolveNetwork(req.query.network);
+    if (net.key !== 'pubnet') {
+      return res.json({ available: false, reason: 'Protocol usage breakdown is pubnet-only.' });
+    }
+    if (!duneConfigured(DUNE_PROTOCOL_FUNCTIONS_QUERY_ID)) {
+      return res.json({
+        available: false,
+        reason: 'Dune isn\'t configured on the server (DUNE_API_KEY/DUNE_PROTOCOL_FUNCTIONS_QUERY_ID).',
+      });
+    }
+
+    const data = await cached('contractsProtocolFunctions:pubnet', TTL.FINALIZED, async () => {
+      const rows = await fetchDuneQueryResults(DUNE_PROTOCOL_FUNCTIONS_QUERY_ID);
+
+      const byProtocol = new Map(); // protocolName -> Map<functionName, callCount>
+      for (const r of rows) {
+        const protocol = r.protocol_name;
+        if (!protocol) continue;
+        const functionName = r.function_name || 'unknown';
+        const callCount = Number(r.call_count) || 0;
+        const fnTotals = byProtocol.get(protocol) || new Map();
+        fnTotals.set(functionName, (fnTotals.get(functionName) || 0) + callCount);
+        byProtocol.set(protocol, fnTotals);
+      }
+
+      const protocols = {};
+      for (const [protocol, fnTotals] of byProtocol) {
+        const functionTotals = Array.from(fnTotals.entries())
+          .map(([name, callCount]) => ({ name, callCount }))
+          .sort((a, b) => b.callCount - a.callCount);
+        protocols[protocol] = {
+          totalCalls: functionTotals.reduce((sum, f) => sum + f.callCount, 0),
+          functionTotals: functionTotals.slice(0, PROTOCOL_FUNCTIONS_TOP_N),
+        };
+      }
+
+      return { available: true, protocols };
     });
 
     res.json(data);

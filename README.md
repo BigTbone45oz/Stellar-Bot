@@ -138,17 +138,54 @@ usage over time" sections just show as unavailable — everything else works fin
    trustline breakdown, and put its ID in `DUNE_TRUSTLINE_GROWTH_QUERY_ID`:
    ```sql
    select
-     o.closed_at_date as day,
      o.asset_code,
      o.asset_issuer,
      count(*) as trustline_changes
    from stellar.history_operations o
    where o.type_string = 'change_trust'
-   group by 1, 2, 3
-   order by 1
+   group by 1, 2
+   order by trustline_changes desc
    ```
+   An earlier version of this query grouped by day too — it finished executing
+   fine, but *reading* the result hit a Dune read-credit limit (402), because
+   the day dimension multiplied the result set by ~3,950x for no reason this
+   route actually needed (it only ever consumes all-time per-asset totals).
+   Dropping `day` from the `GROUP BY` fixed both the cost and the size problem.
+8. Optionally, also save this one for the Smart Contracts page's multi-protocol
+   function-call breakdown (Soroswap, Sushi, Blend, Phoenix — not just
+   Soroswap), and put its ID in `DUNE_PROTOCOL_FUNCTIONS_QUERY_ID`:
+   ```sql
+   with protocol_contracts (contract_id, protocol_name) as (
+     values
+       ('CA2TZIB56KYKD46F7IFBF6XPO5TDNK6N2U6BRTGZ5AF4WUSBN6BKZMGF', 'Soroswap'),
+       -- ... 82 more Soroswap pool addresses
+       ('CAG4F7ROIOYF67FDJVKYVVV3QLZTBVE76COFDORGYSHQYTBRCVMN7T5I', 'Sushi'),
+       -- ... 23 more Sushi pool addresses
+       ('CAE7QVOMBLZ53CDRGK3UNRRHG5EZ5NQA7HHTFASEMYBWHG6MDFZTYHXC', 'Blend'),
+       -- ... 10 more Blend addresses (Pools, Pools V2, Backstop, Backstop V2, Emitter)
+       ('CB5QUVK5GS3IU23TMFZQ3P5J24YBBZP5PHUQAEJ2SP5K55PFTJRUQG2L', 'Phoenix')
+       -- ... 10 more Phoenix pool addresses
+   )
+   select
+     pc.protocol_name,
+     element_at(o.parameters_decoded, 2).value as function_name,
+     count(*) as call_count
+   from stellar.history_operations o
+   join protocol_contracts pc on pc.contract_id = o.contract_id
+   where o.type_string = 'invoke_host_function'
+     and o.function = 'HostFunctionTypeHostFunctionTypeInvokeContract'
+   group by 1, 2
+   order by 1, call_count desc
+   ```
+   The full 129-address list (all four protocols' verified contract addresses,
+   sourced from StellarExpert's Directory API — `api.stellar.expert/explorer/public/directory?tag[]=defi`,
+   grouped by `domain`) is generated, not hand-typed — see CLAUDE.md's "Verified
+   facts" section for how. Aquarius was deliberately excluded despite having the
+   most directory-listed pool addresses (208) — sampled several live and found
+   no recent activity on any of them, consistent with Aquarius still running
+   mostly on Stellar's classic protocol-level DEX rather than Soroban contracts.
 
-All six routes only ever read a saved query's latest cached result (free, no
+All eight routes only ever read a saved query's latest cached result (free, no
 fresh execution triggered), cached server-side for hours — this won't burn
 through Dune's free-tier credits under normal use.
 
@@ -191,8 +228,10 @@ server/                  Express API — the only thing that talks to Horizon/So
       trades.js            DEX trade history
       contracts.js          Soroban contract events (RPC, ~7-day retention) with
                             automatic fallback to Horizon invoke_host_function ops
-                            for older ranges, plus an all-time asset-movement stat
-                            and a Soroswap call-volume trend, both backed by Dune
+                            for older ranges, plus an all-time asset-movement stat,
+                            a Soroswap call-volume trend, network-wide trade-function
+                            breakdown, and a multi-protocol function-call breakdown
+                            (Soroswap/Sushi/Blend/Phoenix), all backed by Dune
       protocols.js           On-chain protocol ranking by volume/TVL, backed by
                             DeFiLlama
       growth.js               All-time account creation/closure trend and per-asset

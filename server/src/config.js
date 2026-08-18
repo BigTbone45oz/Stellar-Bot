@@ -32,6 +32,10 @@ export const DUNE_ACCOUNT_GROWTH_QUERY_ID = process.env.DUNE_ACCOUNT_GROWTH_QUER
 // Powers the per-asset trustline growth breakdown on the Network Growth page —
 // see routes/growth.js's /trustline-trend route.
 export const DUNE_TRUSTLINE_GROWTH_QUERY_ID = process.env.DUNE_TRUSTLINE_GROWTH_QUERY_ID || null;
+// Powers the multi-protocol function-call breakdown on the Smart Contracts page
+// (real usage per protocol — Aquarius, Soroswap, Sushi, Blend, Phoenix — not
+// just Soroswap) — see routes/contracts.js's /protocol-functions route.
+export const DUNE_PROTOCOL_FUNCTIONS_QUERY_ID = process.env.DUNE_PROTOCOL_FUNCTIONS_QUERY_ID || null;
 
 export function resolveNetwork(param) {
   const key = param === 'testnet' ? 'testnet' : 'pubnet';

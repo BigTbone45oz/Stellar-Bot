@@ -78,6 +78,22 @@ export default function SmartContracts({ network }) {
     [networkTrades]
   );
 
+  // Real per-protocol function-call breakdown, beyond just Soroswap — see
+  // contracts.js's /protocol-functions. Not filtered by the swap-detection
+  // signal used elsewhere (network-wide trades, payments.js) since several of
+  // these protocols aren't DEXs (Blend is a lending market — a real call there
+  // moves one asset, not two, and would be invisible to that filter).
+  const [protocolFunctions, setProtocolFunctions] = useState(null);
+  const [protocolFunctionsLoading, setProtocolFunctionsLoading] = useState(false);
+  const [protocolFunctionsError, setProtocolFunctionsError] = useState(null);
+  const [protocolFunctionsSelection, setProtocolFunctionsSelection] = useState('');
+
+  const protocolFunctionsOptions = useMemo(
+    () => Object.keys(protocolFunctions?.protocols || {}).sort(),
+    [protocolFunctions]
+  );
+  const selectedProtocolFunctions = protocolFunctions?.protocols?.[protocolFunctionsSelection] || null;
+
   const sorobanRows = useMemo(() => {
     if (!breakdown) return [];
     const rows = [];
@@ -159,6 +175,25 @@ export default function SmartContracts({ network }) {
       })
       .catch((e) => !cancelled && setNetworkTradesError(e.message))
       .finally(() => !cancelled && setNetworkTradesLoading(false));
+    return () => {
+      cancelled = true;
+    };
+  }, [network]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setProtocolFunctionsLoading(true);
+    setProtocolFunctionsError(null);
+    api
+      .contractsProtocolFunctions(network)
+      .then((d) => {
+        if (cancelled) return;
+        setProtocolFunctions(d);
+        const names = d.available ? Object.keys(d.protocols || {}).sort() : [];
+        setProtocolFunctionsSelection(names.length > 0 ? names[0] : '');
+      })
+      .catch((e) => !cancelled && setProtocolFunctionsError(e.message))
+      .finally(() => !cancelled && setProtocolFunctionsLoading(false));
     return () => {
       cancelled = true;
     };
@@ -308,6 +343,70 @@ export default function SmartContracts({ network }) {
                 xKey="day"
                 kind="line"
               />
+            </>
+          )}
+        </>
+      )}
+
+      <h3 className="section-title">Protocol usage breakdown, all time</h3>
+      <p className="view-hint">
+        Real function-call counts per protocol — how often, and for what — across a handful of
+        manually-verified protocols beyond Soroswap, via contract addresses curated by
+        StellarExpert's Directory. Not filtered by "moved 2+ assets" the way the trading
+        sections above are, since some of these (Blend) are lending markets, not DEXs — a real
+        call there moves one asset, not two, and would be invisible to that filter. Aquarius was
+        considered but excluded: its Soroban contracts showed no recent activity across multiple
+        sampled addresses, consistent with it still running mostly on Stellar's classic DEX (see
+        the note below).
+      </p>
+      {protocolFunctionsLoading && <div className="chart-state">Loading…</div>}
+      {protocolFunctionsError && <div className="chart-state error">{protocolFunctionsError}</div>}
+      {!protocolFunctionsLoading && !protocolFunctionsError && protocolFunctions && !protocolFunctions.available && (
+        <div className="chart-state">{protocolFunctions.reason}</div>
+      )}
+      {!protocolFunctionsLoading && protocolFunctions?.available && protocolFunctionsOptions.length > 0 && (
+        <>
+          <div className="search-row">
+            <select
+              className="window-select"
+              value={protocolFunctionsSelection}
+              onChange={(e) => setProtocolFunctionsSelection(e.target.value)}
+            >
+              {protocolFunctionsOptions.map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          </div>
+          {selectedProtocolFunctions && (
+            <>
+              <div className="stat-row">
+                <StatCard
+                  label={`${protocolFunctionsSelection} — total calls, all time`}
+                  value={selectedProtocolFunctions.totalCalls.toLocaleString()}
+                />
+              </div>
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>#</th>
+                      <th>Function</th>
+                      <th>Calls, all time</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {selectedProtocolFunctions.functionTotals.map((f, i) => (
+                      <tr key={f.name}>
+                        <td>{i + 1}</td>
+                        <td>{f.name}</td>
+                        <td>{f.callCount.toLocaleString()}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </>
           )}
         </>

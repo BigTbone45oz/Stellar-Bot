@@ -26,6 +26,7 @@ export const api = {
   contractsAllTime: (network) => request('/api/contracts/all-time', { network }),
   contractsProtocolTrend: (network) => request('/api/contracts/protocol-trend', { network }),
   contractsNetworkTradingActivity: (network) => request('/api/contracts/network-trading-activity', { network }),
+  contractsProtocolFunctions: (network) => request('/api/contracts/protocol-functions', { network }),
   protocolsRanking: (network) => request('/api/protocols/ranking', { network }),
   accountGrowthTrend: (network) => request('/api/growth/account-trend', { network }),
   trustlineGrowthTrend: (network) => request('/api/growth/trustline-trend', { network }),
