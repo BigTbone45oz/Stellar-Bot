@@ -72,7 +72,10 @@ export async function fetchDuneQueryResults(queryId, timeoutMs = 15_000) {
     // can never bite, so this does the same defensively: attached as a property
     // on the array itself (not a new return shape) so existing call sites don't
     // need to change to keep working — only the ones that want to surface it read
-    // `rows.truncated`.
+    // `rows.truncated`. IMPORTANT for anyone reading it: `.map()`/`.filter()`
+    // return a NEW array and do NOT carry this property over, so every read
+    // site reads `.truncated` off THIS original array (or destructures it
+    // before transforming), never off a `.map()`/`.filter()` result.
     const totalRowCount = data.result?.metadata?.total_row_count;
     if (typeof totalRowCount === 'number' && totalRowCount > rows.length) {
       rows.truncated = true;

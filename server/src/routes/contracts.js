@@ -132,8 +132,23 @@ router.get('/protocol-trend', async (req, res, next) => {
     if (unavailable) return res.json(unavailable);
 
     const data = await cached('contractsProtocolTrend:soroswap:pubnet:v2', TTL.FINALIZED, async () => {
-      const rows = await fetchDuneQueryResults(DUNE_SOROSWAP_TREND_QUERY_ID);
-      let truncated = Boolean(rows.truncated);
+      // Two independent Dune queries — fnRows doesn't depend on rows or vice
+      // versa — so fetched concurrently rather than sequentially (each can
+      // take up to fetchDuneQueryResults' own 15s timeout; awaiting them one
+      // after the other roughly doubles this route's worst-case latency for
+      // no reason). Same "independent upstream calls run concurrently" rule
+      // this codebase applies everywhere else (see /:id/activity's two
+      // segments a few hundred lines below).
+      const functionsConfigured = duneConfigured(DUNE_SOROSWAP_FUNCTIONS_QUERY_ID);
+      const [rows, fnRows] = await Promise.all([
+        fetchDuneQueryResults(DUNE_SOROSWAP_TREND_QUERY_ID),
+        functionsConfigured ? fetchDuneQueryResults(DUNE_SOROSWAP_FUNCTIONS_QUERY_ID) : Promise.resolve(null),
+      ]);
+      // Read directly off the untransformed `rows`/`fnRows` arrays, not a
+      // .map()/.filter() copy — Array methods that return a new array don't
+      // carry over the `truncated` property fetchDuneQueryResults attaches
+      // (see duneClient.js). Both reads happen before any such transform below.
+      let truncated = Boolean(rows.truncated) || Boolean(fnRows?.truncated);
 
       const byDay = new Map();
       for (const r of rows) {
@@ -157,9 +172,7 @@ router.get('/protocol-trend', async (req, res, next) => {
       // object's prototype via the inherited setter, silently dropping that
       // function's data from the JSON response with no error anywhere.
       let dailyByFunction = Object.create(null);
-      if (duneConfigured(DUNE_SOROSWAP_FUNCTIONS_QUERY_ID)) {
-        const fnRows = await fetchDuneQueryResults(DUNE_SOROSWAP_FUNCTIONS_QUERY_ID);
-        truncated = truncated || Boolean(fnRows.truncated);
+      if (functionsConfigured) {
         const totals = new Map();
         for (const r of fnRows) {
           const name = r.function_name || 'unknown';
