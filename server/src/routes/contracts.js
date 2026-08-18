@@ -14,7 +14,7 @@ import { ledgerSequenceForTimestamp, STELLAR_EXPERT_NETWORK } from '../ledgerTim
 import { cached, TTL, ttlForRange } from '../cache.js';
 import { fetchRangeParallel } from '../rangeFetch.js';
 import { parseDateRange } from '../validate.js';
-import { fetchAssetUsdPrice } from '../assetPricing.js';
+import { priceMovementList, sortMovementList } from '../assetPricing.js';
 import { duneConfigured, fetchDuneQueryResults, duneRouteUnavailable } from '../duneClient.js';
 
 const router = Router();
@@ -62,27 +62,14 @@ router.get('/all-time', async (req, res, next) => {
         .filter((a) => a.totalAmount > 0);
 
       const expertNetwork = STELLAR_EXPERT_NETWORK.pubnet;
-      const CONCURRENCY = 6;
-      let nextIdx = 0;
-      async function priceWorker() {
-        while (nextIdx < assets.length) {
-          const entry = assets[nextIdx++];
-          entry.priceUsd = await cached(
-            `assetPriceUsd:pubnet:${entry.code}:${entry.issuer || 'native'}`,
-            TTL.RECENT,
-            () => fetchAssetUsdPrice(expertNetwork, entry.code, entry.issuer)
-          ).catch(() => null);
-          entry.totalUsd = entry.priceUsd !== null ? entry.totalAmount * entry.priceUsd : null;
-        }
-      }
-      await Promise.all(Array.from({ length: Math.min(CONCURRENCY, assets.length) || 1 }, priceWorker));
-
-      assets.sort((a, b) => {
-        if (a.totalUsd !== null && b.totalUsd !== null) return b.totalUsd - a.totalUsd;
-        if (a.totalUsd !== null) return -1;
-        if (b.totalUsd !== null) return 1;
-        return b.totalAmount - a.totalAmount;
-      });
+      // Shared with payments.js's contract-movement/payment-movement pricing —
+      // this route's entries use `totalAmount` as the amount field (not
+      // `total`, payments.js's field name), and `totalAmount` again as the
+      // sort fallback (not `changeCount`) — both previously hand-copied here
+      // as a near-identical inline worker pool that had already drifted from
+      // payments.js's copy in exactly this way.
+      await priceMovementList(assets, expertNetwork, 'pubnet', 'totalAmount');
+      sortMovementList(assets, 'totalAmount');
 
       const totalMovedUsd = assets.reduce((sum, a) => sum + (a.totalUsd || 0), 0);
       const pricedAssetCount = assets.filter((a) => a.totalUsd !== null).length;

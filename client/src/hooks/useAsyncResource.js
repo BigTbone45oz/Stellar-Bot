@@ -45,13 +45,18 @@ export function useAsyncResource(fetcher, resetDeps, options = {}) {
   // the norm here), and depending on them by reference would make the
   // deps-effect below fire on every render instead of only on resetDeps
   // changes, silently reintroducing the exact staleness bug this hook exists
-  // to prevent.
+  // to prevent. `enabledRef` gets the same treatment for the same reason —
+  // `enabled` is read inside the deps-effect below, so a call site that ever
+  // computes it from state NOT listed in resetDeps needs the current render's
+  // value, not whatever it was when resetDeps last changed.
   const fetcherRef = useRef(fetcher);
   const onResetRef = useRef(onReset);
   const onSuccessRef = useRef(onSuccess);
+  const enabledRef = useRef(enabled);
   fetcherRef.current = fetcher;
   onResetRef.current = onReset;
   onSuccessRef.current = onSuccess;
+  enabledRef.current = enabled;
 
   const generationRef = useRef(0);
 
@@ -59,6 +64,15 @@ export function useAsyncResource(fetcher, resetDeps, options = {}) {
     const myGeneration = ++generationRef.current;
     setLoading(true);
     setError(null);
+    // Also clears `data`, not just `error` — without this, a manual/click-
+    // triggered call (enabled: false, e.g. Accounts.jsx's lookup()) that
+    // fails leaves the PREVIOUS result rendering on screen next to the new
+    // error, which is exactly the bug this whole hook exists to prevent. The
+    // deps-effect below already clears `data` before calling `run()` for the
+    // auto-fetch path, so this is a no-op there — it only matters for the
+    // manual-trigger path, which is also the path most likely to be called
+    // repeatedly without an intervening dep change.
+    setData(null);
     return fetcherRef
       .current(...args)
       .then((d) => {
@@ -89,7 +103,7 @@ export function useAsyncResource(fetcher, resetDeps, options = {}) {
     setError(null);
     setLoading(false);
     onResetRef.current?.();
-    if (enabled) run();
+    if (enabledRef.current) run();
     // resetDeps is caller-controlled, same contract as a normal effect deps
     // array — exhaustive-deps is intentionally not satisfiable here since the
     // array's length/contents vary per call site.

@@ -37,6 +37,14 @@ export function usePolledResource(fetcher, resetDeps, { intervalMs, pauseWhenHid
         setError(null);
       } catch (e) {
         if (cancelled || generationRef.current !== myGeneration) return;
+        // Deliberately does NOT clear `data` here, unlike useAsyncResource's
+        // run() — this is stale-while-revalidate by design: a live-health
+        // widget polling every 30s should keep showing the last-known-good
+        // ledger/fee numbers through one flaky poll, with an error banner
+        // alongside them, rather than blanking the whole panel on every
+        // transient failure. Not the same situation as a manual lookup
+        // (Accounts/Trades/Assets search), where a NEW request replacing an
+        // UNRELATED previous result should discard it on failure.
         setError(e.message);
       }
     }

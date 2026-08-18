@@ -3,10 +3,10 @@ import { xdr } from '@stellar/stellar-sdk';
 import { resolveNetwork } from '../config.js';
 import { makeHorizonClient } from '../horizonClient.js';
 import { ledgerSequenceForTimestamp, STELLAR_EXPERT_NETWORK } from '../ledgerTime.js';
-import { cached, TTL, ttlForRange } from '../cache.js';
+import { cached, ttlForRange } from '../cache.js';
 import { fetchRangeParallel } from '../rangeFetch.js';
 import { parseDateRange } from '../validate.js';
-import { fetchAssetUsdPrice } from '../assetPricing.js';
+import { priceMovementList, sortMovementList } from '../assetPricing.js';
 
 const router = Router();
 
@@ -17,35 +17,6 @@ const router = Router();
 // tracked here, matching "what value arrived" rather than modeling both legs.
 const PAYMENT_OP_TYPES = new Set(['payment', 'path_payment_strict_send', 'path_payment_strict_receive']);
 
-// USD-prices a list of { code, issuer, total } entries in place, using the same
-// bounded worker-pool shape used elsewhere in this codebase (contracts.js's
-// per-tx fetch, assets.js's /details) for independent lookups — shared by both
-// the contract-movement and payment-movement pricing passes below so the same
-// concurrency/caching logic isn't duplicated.
-async function priceMovementList(movementList, expertNetwork, netKey) {
-  if (!expertNetwork) {
-    for (const entry of movementList) {
-      entry.priceUsd = null;
-      entry.totalUsd = null;
-    }
-    return;
-  }
-  const CONCURRENCY = 6;
-  let nextIdx = 0;
-  async function priceWorker() {
-    while (nextIdx < movementList.length) {
-      const entry = movementList[nextIdx++];
-      entry.priceUsd = await cached(
-        `assetPriceUsd:${netKey}:${entry.code}:${entry.issuer || 'native'}`,
-        TTL.RECENT,
-        () => fetchAssetUsdPrice(expertNetwork, entry.code, entry.issuer)
-      ).catch(() => null);
-      entry.totalUsd = entry.priceUsd !== null ? entry.total * entry.priceUsd : null;
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, movementList.length) || 1 }, priceWorker));
-}
-
 // Adds one observed amount to a `Map<assetKey, {code, issuer, total, changeCount}>`,
 // creating the entry on first sight — the "get or initialize, then accumulate"
 // step shared by every movement-tracking loop below (contract-caused and
@@ -55,20 +26,6 @@ function accumulateMovement(map, assetKey, code, issuer, amount) {
   entry.total += Number(amount);
   entry.changeCount += 1;
   map.set(assetKey, entry);
-}
-
-// Sorts a priced movement list by USD value when known (what "top assets
-// moved" should mean), falling back to raw change count for anything price
-// lookup failed on — those still get listed, just pushed below the priced
-// ones rather than dropped, so a failed price lookup can't silently hide
-// real activity.
-function sortMovementList(movementList) {
-  movementList.sort((a, b) => {
-    if (a.totalUsd !== null && b.totalUsd !== null) return b.totalUsd - a.totalUsd;
-    if (a.totalUsd !== null) return -1;
-    if (b.totalUsd !== null) return 1;
-    return b.changeCount - a.changeCount;
-  });
 }
 
 // A Soroban `invoke_host_function` op with function type InvokeContract carries the
@@ -190,7 +147,17 @@ router.get('/breakdown', async (req, res, next) => {
                   );
                   movementByType.set(c.type, (movementByType.get(c.type) || 0) + 1);
                 }
-                if (distinctAssets.size >= 2 && swaps.length < 50) {
+                if (distinctAssets.size >= 2) {
+                  // Not capped here — fetchRangeParallel's chunks resolve
+                  // concurrently, in real-world response-time order rather
+                  // than ledger order (rangeFetch.js's own doc comment says
+                  // as much), so capping mid-collection would make "which 50
+                  // swaps" depend on which of the 6 concurrent Horizon
+                  // workers happened to respond first that particular run —
+                  // not a chronological or otherwise meaningful prefix.
+                  // Collected in full (implicitly bounded by the same
+                  // maxRecords op-scan cap fetchRangeParallel already
+                  // enforces below) and sorted/capped after the loop instead.
                   swaps.push({
                     // A transaction can contain multiple invoke_host_function
                     // operations, each independently qualifying as a swap here —
@@ -271,6 +238,12 @@ router.get('/breakdown', async (req, res, next) => {
       const paymentMovementList = Array.from(paymentMovement.values());
       sortMovementList(movementList);
       sortMovementList(paymentMovementList);
+
+      // Sorted chronologically, then capped — makes "top 50" a real,
+      // deterministic prefix (most recent 50) instead of whichever 50
+      // happened to arrive first across 6 concurrently-resolving chunks.
+      swaps.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+      swaps.length = Math.min(swaps.length, 50);
 
       const totalMovedUsd = movementList.reduce((sum, e) => sum + (e.totalUsd || 0), 0);
       const pricedAssetCount = movementList.filter((e) => e.totalUsd !== null).length;

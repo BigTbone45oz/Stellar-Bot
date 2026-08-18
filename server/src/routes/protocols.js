@@ -59,6 +59,17 @@ router.get('/ranking', async (req, res, next) => {
         fetchJson(PROTOCOLS_URL),
         fetchJson(DEX_VOLUME_URL),
       ]);
+
+      // If BOTH failed, this isn't "degrade to partial data" territory anymore
+      // — it's a genuine outage, and letting it fall through to the merge
+      // logic below would produce a fake `{ available: true, protocols: [] }`
+      // that then gets cached and served as gospel ("DeFiLlama has zero
+      // Stellar protocols") to every visitor for a full TTL.HOURLY (1 hour),
+      // long outliving the actual blip. Throwing here means cached() never
+      // stores anything and the route returns a real error instead.
+      if (allProtocolsResult.status === 'rejected' && dexOverviewResult.status === 'rejected') {
+        throw allProtocolsResult.reason;
+      }
       const allProtocols = allProtocolsResult.status === 'fulfilled' ? allProtocolsResult.value : [];
       const dexOverview = dexOverviewResult.status === 'fulfilled' ? dexOverviewResult.value : {};
 
