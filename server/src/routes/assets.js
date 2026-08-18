@@ -357,37 +357,32 @@ router.get('/price-history', async (req, res, next) => {
       // Each chunk yields at most PAGE_LIMIT records, so capping the number
       // of chunks claimed bounds both the returned size and the actual
       // number of Horizon requests made, instead of firing them all and
-      // throwing most away via a post-hoc slice. Same "cap chunks claimed,
-      // mark truncated if any remain unclaimed" shape as rangeFetch.js — and,
-      // like that file, not using workerPool.js's runWorkerPool here since it
-      // always drains the full item list rather than stopping early at a cap.
+      // throwing most away via a post-hoc slice. Unlike rangeFetch.js's cap
+      // (which depends on per-chunk record counts only known at fetch time),
+      // maxChunks here is computed from constants alone, so which chunks will
+      // ever be fetched is knowable up front — pre-sliced and run through the
+      // shared worker pool rather than a bespoke early-stop loop.
       const maxChunks = Math.ceil(RECORDS_CAP / PAGE_LIMIT);
+      const boundedChunks = chunkBounds.slice(0, maxChunks);
 
-      const chunkResults = new Array(chunkBounds.length);
-      let nextChunk = 0;
-      async function worker() {
-        while (nextChunk < chunkBounds.length && nextChunk < maxChunks) {
-          const i = nextChunk++;
-          const [chunkStart, chunkEnd] = chunkBounds[i];
-          const page = await horizon.get('/trade_aggregations', {
-            base_asset_type: 'native',
-            counter_asset_type: code.length > 4 ? 'credit_alphanum12' : 'credit_alphanum4',
-            counter_asset_code: code,
-            counter_asset_issuer: issuer,
-            start_time: chunkStart,
-            end_time: chunkEnd,
-            resolution: resolutionMs,
-            order: 'asc',
-            limit: PAGE_LIMIT,
-          });
-          chunkResults[i] = page._embedded.records;
-        }
-      }
-      const workerCount = Math.min(6, chunkBounds.length, maxChunks) || 1;
-      await Promise.all(Array.from({ length: workerCount }, worker));
+      const chunkResults = new Array(boundedChunks.length);
+      await runWorkerPool(boundedChunks, 6, async ([chunkStart, chunkEnd], i) => {
+        const page = await horizon.get('/trade_aggregations', {
+          base_asset_type: 'native',
+          counter_asset_type: code.length > 4 ? 'credit_alphanum12' : 'credit_alphanum4',
+          counter_asset_code: code,
+          counter_asset_issuer: issuer,
+          start_time: chunkStart,
+          end_time: chunkEnd,
+          resolution: resolutionMs,
+          order: 'asc',
+          limit: PAGE_LIMIT,
+        });
+        chunkResults[i] = page._embedded.records;
+      });
 
       const records = chunkResults.flat().filter(Boolean);
-      let truncated = nextChunk < chunkBounds.length;
+      let truncated = boundedChunks.length < chunkBounds.length;
       if (records.length > RECORDS_CAP) {
         records.length = RECORDS_CAP;
         truncated = true;
