@@ -1,5 +1,10 @@
 import { Router } from 'express';
-import { resolveNetwork, DUNE_ACCOUNT_GROWTH_QUERY_ID, DUNE_TRUSTLINE_GROWTH_QUERY_ID } from '../config.js';
+import {
+  resolveNetwork,
+  DUNE_ACCOUNT_GROWTH_QUERY_ID,
+  DUNE_TRUSTLINE_GROWTH_QUERY_ID,
+  TREND_DAYS,
+} from '../config.js';
 import { cached, TTL } from '../cache.js';
 import { fetchDuneQueryResults, duneRouteUnavailable } from '../duneClient.js';
 
@@ -9,10 +14,10 @@ const router = Router();
 
 // The underlying query covers Stellar's full history (back to 2015, ~3,950
 // days as of this writing) — trimmed to a trailing window before it reaches
-// the client, same reasoning as protocols.js's TREND_DAYS: a chart-sized
-// payload, not a decade of daily points on every page load. Totals below are
-// computed from the FULL untrimmed result, not just this window.
-const TREND_DAYS = 180;
+// the client (TREND_DAYS, shared with protocols.js's /ranking — see
+// config.js): a chart-sized payload, not a decade of daily points on every
+// page load. Totals below are computed from the FULL untrimmed result, not
+// just this window.
 
 // Row shape (r.day, r.accounts_created, r.accounts_merged) verified live
 // against the actual saved query (dune.com/queries/8363713): real rows came

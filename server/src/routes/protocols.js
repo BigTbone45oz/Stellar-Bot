@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { cached, TTL } from '../cache.js';
 import { fetchJsonOrThrow } from '../fetchWithTimeout.js';
+import { TREND_DAYS } from '../config.js';
 
 const router = Router();
 
@@ -24,7 +25,8 @@ const PROTOCOLS_URL = 'https://api.llama.fi/protocols';
 // as totalDataChart but split out: [ [unixSeconds, { protocolName: usd }], ... ]) —
 // powers the per-protocol line selector on the trend chart.
 const DEX_VOLUME_URL = 'https://api.llama.fi/overview/dexs/stellar';
-const TREND_DAYS = 180;
+// TREND_DAYS itself lives in config.js, shared with growth.js's /account-trend
+// — was independently declared as the same value in both files before.
 
 // CEXs (Binance, Gate, Poloniex, ...) show up in DeFiLlama's Stellar TVL list
 // because they custody Stellar assets off-chain — they're not programs running

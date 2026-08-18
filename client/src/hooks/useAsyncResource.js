@@ -90,13 +90,6 @@ export function useAsyncResource(fetcher, resetDeps, options = {}) {
       });
   }, []);
 
-  const reset = useCallback(() => {
-    generationRef.current += 1; // invalidate any in-flight request
-    setData(null);
-    setError(null);
-    setLoading(false);
-  }, []);
-
   useEffect(() => {
     generationRef.current += 1; // invalidate anything in flight from before this change
     setData(null);
@@ -110,5 +103,5 @@ export function useAsyncResource(fetcher, resetDeps, options = {}) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, resetDeps);
 
-  return { data, error, loading, run, reset, setData };
+  return { data, error, loading, run };
 }

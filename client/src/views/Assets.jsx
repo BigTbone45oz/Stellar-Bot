@@ -38,6 +38,17 @@ function detailsKeyFor(a) {
   return `${a.code}:${a.issuer || ''}:${a.domain || ''}`;
 }
 
+// `details` state is cached across page flips AND volume-window changes, but the
+// server's response for a given asset carries window-specific volume data — a raw
+// detailsKeyFor() key would let a stale window's volume render under a newly
+// selected window's label until the new fetch resolves. Namespacing the LOCAL
+// cache key by volumeWindow (never sent to/expected from the server — see
+// detailsKeyFor's own comment) fixes that, and doubles as the "do I already have
+// this" check that skips redundant refetches on page/window flip-backs.
+function localDetailsKey(a, volumeWindow) {
+  return `${detailsKeyFor(a)}:${volumeWindow}`;
+}
+
 function formatUsd(n) {
   if (n === null || n === undefined) return '—';
   return n.toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumSignificantDigits: 6 });
@@ -98,16 +109,32 @@ export default function Assets({ network }) {
   // errors, and has no loading/error state of its own — a genuinely different shape.
   useEffect(() => {
     if (pageAssets.length === 0) return;
+    // Skip the fetch entirely if every asset on this page already has a
+    // details entry for the CURRENT volume window — flipping back to an
+    // already-seen page+window combo is then genuinely free, not just
+    // display-instant while still re-hitting the network every time.
+    const needsFetch = pageAssets.some((a) => !(localDetailsKey(a, volumeWindow) in details));
+    if (!needsFetch) return;
     let cancelled = false;
     const assetsParam = pageAssets.map(detailsKeyFor).join(',');
     api
       .assetDetails(network, assetsParam, volumeWindow)
-      .then((d) => !cancelled && setDetails((prev) => ({ ...prev, ...d })))
+      .then((d) => {
+        if (cancelled) return;
+        setDetails((prev) => {
+          const next = { ...prev };
+          for (const a of pageAssets) {
+            const serverKey = detailsKeyFor(a);
+            if (serverKey in d) next[localDetailsKey(a, volumeWindow)] = d[serverKey];
+          }
+          return next;
+        });
+      })
       .catch(() => {}); // best-effort enrichment — table still works with just /top's data
     return () => {
       cancelled = true;
     };
-  }, [network, pageAssets, volumeWindow]);
+  }, [network, pageAssets, volumeWindow, details]);
 
   // Manual, code-triggered search — enabled: false, same shape as Accounts.jsx/
   // Trades.jsx. `network` is still in resetDeps so a network switch clears a
@@ -163,7 +190,7 @@ export default function Assets({ network }) {
   }
 
   function renderDetail(a) {
-    const d = details[detailsKeyFor(a)];
+    const d = details[localDetailsKey(a, volumeWindow)];
     const liquidityUsd = d?.liquidity != null && a.priceUsd != null ? d.liquidity * a.priceUsd : null;
     const volumeUsd = d?.volume != null && a.priceUsd != null ? d.volume * a.priceUsd : null;
 
@@ -320,7 +347,7 @@ export default function Assets({ network }) {
               <tbody>
                 {pageAssets.map((a) => {
                   const isOpen = expanded && assetKey(expanded) === assetKey(a);
-                  const d = details[detailsKeyFor(a)];
+                  const d = details[localDetailsKey(a, volumeWindow)];
                   const displayName = d?.name || a.name;
                   const liquidityUsd = d?.liquidity != null && a.priceUsd != null ? d.liquidity * a.priceUsd : null;
                   const volumeUsd = d?.volume != null && a.priceUsd != null ? d.volume * a.priceUsd : null;

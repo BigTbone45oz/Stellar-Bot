@@ -5,8 +5,14 @@ import { httpError } from './httpError.js';
 // means re-clicking the same date-range preset — the single most common
 // interaction — actually hits the cache instead of missing on millisecond-precision
 // timestamp differences from `new Date().toISOString()` being called fresh each
-// time. This can only shrink a range very slightly (floor, never ceiling), which is
-// immaterial at the day-level granularity every chart in this app buckets at.
+// time. Note this floors start AND end independently, so the resulting range's
+// WIDTH isn't guaranteed to only shrink — start moves earlier (widening the range
+// backward) while end also moves earlier (narrowing the forward edge), so
+// depending on where each raw timestamp falls within its own minute, the floored
+// range can come out up to ~1 minute wider than requested, not just narrower.
+// Immaterial at the day-level granularity every chart in this app buckets at,
+// same as the millisecond-level trim itself — just don't assume "floor" here
+// means "monotonically shrinks."
 const CACHE_GRANULARITY_MS = 60_000;
 
 function floorToGranularity(ms) {

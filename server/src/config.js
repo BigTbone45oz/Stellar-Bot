@@ -43,3 +43,10 @@ export function resolveNetwork(param) {
 }
 
 export const PORT = process.env.PORT || 8787;
+
+// Shared by growth.js's /account-trend and protocols.js's /ranking — both
+// trim a full-history Dune/DeFiLlama series down to a chart-sized trailing
+// window before it reaches the client. Was independently declared as the
+// same value (180) in both files before being pulled out here, so a future
+// change to one doesn't silently desync the two trend charts' window sizes.
+export const TREND_DAYS = 180;

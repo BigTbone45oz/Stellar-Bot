@@ -47,12 +47,21 @@ router.get('/all-time', async (req, res, next) => {
     if (unavailable) return res.json(unavailable);
 
     // Dune's own materialized result barely changes minute-to-minute (it only
-    // refreshes when the saved query is re-run), so this is cached generously —
-    // no reason to spend a Dune API credit on every page load.
-    const data = await cached('contractsAllTime:pubnet', TTL.FINALIZED, async () => {
+    // refreshes when the saved query is re-run), so the RAW amounts are
+    // cached generously — no reason to spend a Dune API credit on every page
+    // load. Deliberately NOT wrapping the pricing step in this same 12h
+    // cache (an earlier version did): the USD conversion depends on a live
+    // asset price, which changes far more often than the underlying Dune
+    // amounts do — freezing totalUsd/totalMovedUsd for 12h alongside the
+    // amounts meant a real price move (not rare in crypto) showed as a stale
+    // USD figure for up to 12h with no indication it was stale. Re-pricing
+    // on every request isn't as expensive as it sounds: each individual
+    // asset's price is itself already cached at TTL.RECENT inside
+    // priceMovementList/fetchAssetUsdPrice, so most requests just do fresh
+    // math against an already-cached recent price, not a fresh network call.
+    const rawAssets = await cached('contractsAllTimeRaw:pubnet', TTL.FINALIZED, async () => {
       const rows = await fetchDuneQueryResults(DUNE_QUERY_ID);
-
-      const assets = rows
+      return rows
         .map((r) => ({
           code: r.asset_code || 'XLM',
           issuer: r.asset_issuer || null,
@@ -60,30 +69,33 @@ router.get('/all-time', async (req, res, next) => {
           effectCount: Number(r.effect_count) || 0,
         }))
         .filter((a) => a.totalAmount > 0);
-
-      const expertNetwork = STELLAR_EXPERT_NETWORK.pubnet;
-      // Shared with payments.js's contract-movement/payment-movement pricing —
-      // this route's entries use `totalAmount` as the amount field (not
-      // `total`, payments.js's field name), and `totalAmount` again as the
-      // sort fallback (not `changeCount`) — both previously hand-copied here
-      // as a near-identical inline worker pool that had already drifted from
-      // payments.js's copy in exactly this way.
-      await priceMovementList(assets, expertNetwork, 'pubnet', 'totalAmount');
-      sortMovementList(assets, 'totalAmount');
-
-      const totalMovedUsd = assets.reduce((sum, a) => sum + (a.totalUsd || 0), 0);
-      const pricedAssetCount = assets.filter((a) => a.totalUsd !== null).length;
-
-      return {
-        available: true,
-        totalMovedUsd,
-        pricedAssetCount,
-        assetCount: assets.length,
-        topAssets: assets.slice(0, TOP_ALL_TIME_ASSETS_SHOWN),
-      };
     });
 
-    res.json(data);
+    // Cloned, not mutated in place — `rawAssets` is the object `cached()`
+    // returns from its own store on every call within the TTL window;
+    // writing priceUsd/totalUsd directly onto those objects would bake a
+    // stale price into the 12h-cached raw data itself.
+    const assets = rawAssets.map((a) => ({ ...a }));
+    const expertNetwork = STELLAR_EXPERT_NETWORK.pubnet;
+    // Shared with payments.js's contract-movement/payment-movement pricing —
+    // this route's entries use `totalAmount` as the amount field (not
+    // `total`, payments.js's field name), and `totalAmount` again as the
+    // sort fallback (not `changeCount`) — both previously hand-copied here
+    // as a near-identical inline worker pool that had already drifted from
+    // payments.js's copy in exactly this way.
+    await priceMovementList(assets, expertNetwork, 'pubnet', 'totalAmount');
+    sortMovementList(assets, 'totalAmount');
+
+    const totalMovedUsd = assets.reduce((sum, a) => sum + (a.totalUsd || 0), 0);
+    const pricedAssetCount = assets.filter((a) => a.totalUsd !== null).length;
+
+    res.json({
+      available: true,
+      totalMovedUsd,
+      pricedAssetCount,
+      assetCount: assets.length,
+      topAssets: assets.slice(0, TOP_ALL_TIME_ASSETS_SHOWN),
+    });
   } catch (err) {
     next(err);
   }
