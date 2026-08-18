@@ -140,9 +140,17 @@ router.get('/protocol-trend', async (req, res, next) => {
       // this codebase applies everywhere else (see /:id/activity's two
       // segments a few hundred lines below).
       const functionsConfigured = duneConfigured(DUNE_SOROSWAP_FUNCTIONS_QUERY_ID);
+      // The functions query is purely optional (see the comment below) — caught
+      // independently so a transient failure on IT (rate limit, timeout, a
+      // momentary Dune hiccup) can't take down the primary call-volume trend,
+      // which succeeded fine. A bare Promise.all here would reject the whole
+      // route on either failing, silently breaking the "optional" promise this
+      // route's own comment makes — same graceful-degradation pattern already
+      // used by fetchViaRpcEvents/fetchViaHorizonFallback below and by
+      // protocols.js's Promise.allSettled for its two DeFiLlama calls.
       const [rows, fnRows] = await Promise.all([
         fetchDuneQueryResults(DUNE_SOROSWAP_TREND_QUERY_ID),
-        functionsConfigured ? fetchDuneQueryResults(DUNE_SOROSWAP_FUNCTIONS_QUERY_ID) : Promise.resolve(null),
+        functionsConfigured ? fetchDuneQueryResults(DUNE_SOROSWAP_FUNCTIONS_QUERY_ID).catch(() => null) : Promise.resolve(null),
       ]);
       // Read directly off the untransformed `rows`/`fnRows` arrays, not a
       // .map()/.filter() copy — Array methods that return a new array don't
@@ -172,7 +180,10 @@ router.get('/protocol-trend', async (req, res, next) => {
       // object's prototype via the inherited setter, silently dropping that
       // function's data from the JSON response with no error anywhere.
       let dailyByFunction = Object.create(null);
-      if (functionsConfigured) {
+      // fnRows can be null both when the query isn't configured AND when it IS
+      // configured but its fetch failed (caught above) — both cases degrade
+      // the same way, to an empty function breakdown.
+      if (fnRows) {
         const totals = new Map();
         for (const r of fnRows) {
           const name = r.function_name || 'unknown';
