@@ -30,6 +30,10 @@ export default function LedgersTransactions({ network }) {
     let cancelled = false;
     setLoading(true);
     setError(null);
+    // Without this, a failed refetch leaves the previous range/network's
+    // truncation banner on screen (it's only gated on !loading, not !error)
+    // describing data that no longer exists.
+    setData(null);
     api
       .ledgerVolume(network, range.start, range.end)
       .then((d) => !cancelled && setData(d))

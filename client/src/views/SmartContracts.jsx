@@ -119,6 +119,11 @@ export default function SmartContracts({ network }) {
     let cancelled = false;
     setBreakdownLoading(true);
     setBreakdownError(null);
+    // Without this, a failed refetch leaves the previous range/network's
+    // asset-movement table, movement-type table, and swaps list on screen —
+    // those are only gated on !breakdownLoading, not !breakdownError, so a
+    // stale table and the new error would render together.
+    setBreakdown(null);
     api
       .opsBreakdown(network, breakdownRange.start, breakdownRange.end)
       .then((d) => !cancelled && setBreakdown(d))
@@ -133,6 +138,7 @@ export default function SmartContracts({ network }) {
     let cancelled = false;
     setAllTimeLoading(true);
     setAllTimeError(null);
+    setAllTime(null);
     api
       .contractsAllTime(network)
       .then((d) => !cancelled && setAllTime(d))
@@ -147,6 +153,7 @@ export default function SmartContracts({ network }) {
     let cancelled = false;
     setProtocolTrendLoading(true);
     setProtocolTrendError(null);
+    setProtocolTrend(null);
     api
       .contractsProtocolTrend(network)
       .then((d) => {
@@ -165,6 +172,7 @@ export default function SmartContracts({ network }) {
     let cancelled = false;
     setNetworkTradesLoading(true);
     setNetworkTradesError(null);
+    setNetworkTrades(null);
     api
       .contractsNetworkTradingActivity(network)
       .then((d) => {
@@ -183,6 +191,7 @@ export default function SmartContracts({ network }) {
     let cancelled = false;
     setProtocolFunctionsLoading(true);
     setProtocolFunctionsError(null);
+    setProtocolFunctions(null);
     api
       .contractsProtocolFunctions(network)
       .then((d) => {
@@ -393,24 +402,26 @@ export default function SmartContracts({ network }) {
                       <tr className="asset-detail-row">
                         <td colSpan={2}>
                           <div className="asset-detail">
-                            <table>
-                              <thead>
-                                <tr>
-                                  <th>#</th>
-                                  <th>Function</th>
-                                  <th>Calls, all time</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {fn.functionTotals.map((f, i) => (
-                                  <tr key={f.name}>
-                                    <td>{i + 1}</td>
-                                    <td>{f.name}</td>
-                                    <td>{f.callCount.toLocaleString()}</td>
+                            <div className="table-wrap">
+                              <table>
+                                <thead>
+                                  <tr>
+                                    <th>#</th>
+                                    <th>Function</th>
+                                    <th>Calls, all time</th>
                                   </tr>
-                                ))}
-                              </tbody>
-                            </table>
+                                </thead>
+                                <tbody>
+                                  {fn.functionTotals.map((f, i) => (
+                                    <tr key={f.name}>
+                                      <td>{i + 1}</td>
+                                      <td>{f.name}</td>
+                                      <td>{f.callCount.toLocaleString()}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
                           </div>
                         </td>
                       </tr>

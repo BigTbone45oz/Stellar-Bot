@@ -48,10 +48,19 @@ router.get('/ranking', async (req, res, next) => {
     }
 
     const data = await cached('protocolsRanking:pubnet', TTL.HOURLY, async () => {
-      const [allProtocols, dexOverview] = await Promise.all([
+      // Promise.allSettled, not Promise.all — these are two independent calls
+      // to the same third party (no SLA), and the merge logic below already
+      // tolerates missing data from either side (every field it reads has an
+      // `|| []`/`|| null` fallback). A transient failure on just the volume
+      // endpoint shouldn't take down a TVL-only ranking that would otherwise
+      // have rendered fine — same "degrade rather than fail" principle this
+      // codebase applies to every other best-effort external call.
+      const [allProtocolsResult, dexOverviewResult] = await Promise.allSettled([
         fetchJson(PROTOCOLS_URL),
         fetchJson(DEX_VOLUME_URL),
       ]);
+      const allProtocols = allProtocolsResult.status === 'fulfilled' ? allProtocolsResult.value : [];
+      const dexOverview = dexOverviewResult.status === 'fulfilled' ? dexOverviewResult.value : {};
 
       // Joined by name — NOT by DeFiLlama's `parentProtocol` field. That field
       // groups multiple genuinely DIFFERENT products under one shared parent
@@ -144,7 +153,11 @@ router.get('/ranking', async (req, res, next) => {
       // the ranking table's canonical name ("Allbridge Core") — same alias
       // lookup, so trend data isn't silently dropped for that one protocol.
       const rankedNames = new Set(protocols.map((p) => p.name));
-      const volumeTrendByProtocol = {};
+      // Object.create(null), not {} — protocol names come from DeFiLlama, a
+      // third party we don't control, so a plain {} risks the same silent
+      // "__proto__" key corruption already fixed in contracts.js's analogous
+      // dailyByFunction/protocols objects.
+      const volumeTrendByProtocol = Object.create(null);
       for (const [ts, byProtocolUsd] of dexOverview.totalDataChartBreakdown || []) {
         if (ts < cutoffSec) continue;
         const day = new Date(ts * 1000).toISOString().slice(0, 10);

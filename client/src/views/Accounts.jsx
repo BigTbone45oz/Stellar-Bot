@@ -75,22 +75,24 @@ export default function Accounts({ network }) {
           </div>
 
           <h4 className="subhead-label">Balances</h4>
-          <table>
-            <thead>
-              <tr>
-                <th>Asset</th>
-                <th>Balance</th>
-              </tr>
-            </thead>
-            <tbody>
-              {account.balances.map((b) => (
-                <tr key={`${b.asset_type}-${b.asset_code || 'native'}-${b.asset_issuer || ''}`}>
-                  <td>{b.asset_type === 'native' ? 'XLM' : b.asset_code}</td>
-                  <td>{Number(b.balance).toLocaleString(undefined, { maximumFractionDigits: 7 })}</td>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Asset</th>
+                  <th>Balance</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {account.balances.map((b) => (
+                  <tr key={`${b.asset_type}-${b.asset_code || 'native'}-${b.asset_issuer || ''}`}>
+                    <td>{b.asset_type === 'native' ? 'XLM' : b.asset_code}</td>
+                    <td>{Number(b.balance).toLocaleString(undefined, { maximumFractionDigits: 7 })}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
 
           <h4 className="subhead-label">Recent Payments</h4>
           <ul className="tx-list">

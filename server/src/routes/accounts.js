@@ -31,24 +31,34 @@ router.get('/:id', async (req, res, next) => {
         sequence: account.sequence,
         subentryCount: account.subentry_count,
         balances: account.balances,
-        recentPayments: payPage._embedded.records.map((p) => ({
-          id: p.id, // the operation's own id — unique per record, unlike transactionHash
-                    // (a single transaction can contain multiple payment operations)
-          type: p.type,
-          from: p.from,
-          to: p.to,
-          amount: p.amount,
-          assetType: p.asset_type,
-          assetCode: p.asset_code,
-          // Two different assets can share the same code under different
-          // issuers (the exact ambiguity assets.js's /top numAccounts and
-          // payments.js's swap legs already account for) — without the
-          // issuer, a payment in a shared code (real or a look-alike scam
-          // token) is indistinguishable from the legitimate asset.
-          assetIssuer: p.asset_issuer,
-          createdAt: p.created_at,
-          transactionHash: p.transaction_hash,
-        })),
+        // Horizon's /payments collection also includes account_merge records
+        // (per Horizon's own docs) — those have no amount/asset_type/asset_code
+        // on the operation record at all (a merge moves the account's entire
+        // remaining balance, only visible via effects, not this endpoint), so
+        // mapping one straight through would render as a misleading "XLM"
+        // payment with a blank/NaN amount. Filtered out here, matching
+        // payments.js's own PAYMENT_OP_TYPES, which deliberately excludes it
+        // from "payment volume" for the same reason.
+        recentPayments: payPage._embedded.records
+          .filter((p) => p.type !== 'account_merge')
+          .map((p) => ({
+            id: p.id, // the operation's own id — unique per record, unlike transactionHash
+                      // (a single transaction can contain multiple payment operations)
+            type: p.type,
+            from: p.from,
+            to: p.to,
+            amount: p.amount,
+            assetType: p.asset_type,
+            assetCode: p.asset_code,
+            // Two different assets can share the same code under different
+            // issuers (the exact ambiguity assets.js's /top numAccounts and
+            // payments.js's swap legs already account for) — without the
+            // issuer, a payment in a shared code (real or a look-alike scam
+            // token) is indistinguishable from the legitimate asset.
+            assetIssuer: p.asset_issuer,
+            createdAt: p.created_at,
+            transactionHash: p.transaction_hash,
+          })),
       };
     });
 

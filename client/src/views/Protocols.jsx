@@ -68,6 +68,10 @@ export default function Protocols({ network }) {
     setError(null);
     setTrendSelection(TOTAL_OPTION);
     setExpandedProtocol(null);
+    // Without this, a failed refetch (network switch, or a transient
+    // DeFiLlama error) would leave the previous network's ranking table/chart
+    // on screen, rendered alongside the new error, with nothing marking it stale.
+    setData(null);
     api
       .protocolsRanking(network)
       .then((d) => !cancelled && setData(d))
@@ -82,6 +86,10 @@ export default function Protocols({ network }) {
     let cancelled = false;
     setProtocolFunctionsLoading(true);
     setProtocolFunctionsError(null);
+    // Without this, switching networks (or a transient failure) leaves the
+    // previous network's function-call data in place — expanding a protocol
+    // row that exists under both networks would silently show stale numbers.
+    setProtocolFunctions(null);
     api
       .contractsProtocolFunctions(network)
       .then((d) => !cancelled && setProtocolFunctions(d))
@@ -233,24 +241,26 @@ export default function Protocols({ network }) {
                                         not filtered by trade detection, so this covers every real use
                                         (lending actions, liquidity management, etc.), not just swaps.
                                       </p>
-                                      <table>
-                                        <thead>
-                                          <tr>
-                                            <th>#</th>
-                                            <th>Function</th>
-                                            <th>Calls, all time</th>
-                                          </tr>
-                                        </thead>
-                                        <tbody>
-                                          {fn.functionTotals.map((f, idx) => (
-                                            <tr key={f.name}>
-                                              <td>{idx + 1}</td>
-                                              <td>{f.name}</td>
-                                              <td>{f.callCount.toLocaleString()}</td>
+                                      <div className="table-wrap">
+                                        <table>
+                                          <thead>
+                                            <tr>
+                                              <th>#</th>
+                                              <th>Function</th>
+                                              <th>Calls, all time</th>
                                             </tr>
-                                          ))}
-                                        </tbody>
-                                      </table>
+                                          </thead>
+                                          <tbody>
+                                            {fn.functionTotals.map((f, idx) => (
+                                              <tr key={f.name}>
+                                                <td>{idx + 1}</td>
+                                                <td>{f.name}</td>
+                                                <td>{f.callCount.toLocaleString()}</td>
+                                              </tr>
+                                            ))}
+                                          </tbody>
+                                        </table>
+                                      </div>
                                     </>
                                   );
                                 })()}

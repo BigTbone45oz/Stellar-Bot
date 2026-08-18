@@ -13,6 +13,13 @@ export default function DateRangePicker({ start, end, onChange, presets = DEFAUL
   }
 
   function updateStart(value) {
+    // Native date inputs fire onChange with '' when cleared (the browser's
+    // built-in clear button, or backspacing through the field) — a completely
+    // ordinary interaction, not a contrived edge case. new Date('') throws on
+    // .toISOString() (RangeError: Invalid time value), which would otherwise
+    // crash this handler with no visible feedback. No-op until a real date is
+    // picked, same as leaving the range unchanged.
+    if (!value) return;
     const newStart = new Date(value).toISOString();
     // Guard against an inverted range from the UI itself, rather than relying
     // solely on the server to reject it after a round trip.
@@ -20,6 +27,7 @@ export default function DateRangePicker({ start, end, onChange, presets = DEFAUL
   }
 
   function updateEnd(value) {
+    if (!value) return; // see updateStart — same clear-button crash risk
     // Treat the picked day as running through its own end, not its start —
     // otherwise picking the same calendar day for both "From" and "To" (a
     // completely natural way to ask "show me all of today") produces a

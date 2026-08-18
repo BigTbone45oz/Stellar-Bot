@@ -187,6 +187,12 @@ export default function Assets({ network }) {
     let cancelled = false;
     setLoading(true);
     setError(null);
+    // The early-return branch above already clears these when there's no
+    // asset expanded — this branch (an actual fetch about to fire) needs the
+    // same reset, or a failed/superseded refetch leaves the previous asset's
+    // truncation banner and history on screen next to the new error.
+    setHistory(null);
+    setHistoryTruncated(false);
     api
       .priceHistory(network, expanded.code, expanded.issuer, range.start, range.end)
       .then((d) => {

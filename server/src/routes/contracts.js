@@ -15,7 +15,7 @@ import { cached, TTL, ttlForRange } from '../cache.js';
 import { fetchRangeParallel } from '../rangeFetch.js';
 import { parseDateRange } from '../validate.js';
 import { fetchAssetUsdPrice } from '../assetPricing.js';
-import { duneConfigured, fetchDuneQueryResults } from '../duneClient.js';
+import { duneConfigured, fetchDuneQueryResults, duneRouteUnavailable } from '../duneClient.js';
 
 const router = Router();
 const CONTRACT_ID_RE = /^C[A-Z2-7]{55}$/;
@@ -43,12 +43,8 @@ function passphraseFor(networkKey) {
 router.get('/all-time', async (req, res, next) => {
   try {
     const net = resolveNetwork(req.query.network);
-    if (net.key !== 'pubnet') {
-      return res.json({ available: false, reason: 'All-time totals are only meaningful on pubnet.' });
-    }
-    if (!duneConfigured(DUNE_QUERY_ID)) {
-      return res.json({ available: false, reason: 'Dune isn\'t configured on the server (DUNE_API_KEY/DUNE_QUERY_ID).' });
-    }
+    const unavailable = duneRouteUnavailable(net, DUNE_QUERY_ID, 'DUNE_QUERY_ID', 'All-time totals');
+    if (unavailable) return res.json(unavailable);
 
     // Dune's own materialized result barely changes minute-to-minute (it only
     // refreshes when the saved query is re-run), so this is cached generously —
@@ -129,12 +125,8 @@ router.get('/all-time', async (req, res, next) => {
 router.get('/protocol-trend', async (req, res, next) => {
   try {
     const net = resolveNetwork(req.query.network);
-    if (net.key !== 'pubnet') {
-      return res.json({ available: false, reason: 'Protocol trends are pubnet-only.' });
-    }
-    if (!duneConfigured(DUNE_SOROSWAP_TREND_QUERY_ID)) {
-      return res.json({ available: false, reason: 'Dune isn\'t configured on the server (DUNE_API_KEY/DUNE_SOROSWAP_TREND_QUERY_ID).' });
-    }
+    const unavailable = duneRouteUnavailable(net, DUNE_SOROSWAP_TREND_QUERY_ID, 'DUNE_SOROSWAP_TREND_QUERY_ID', 'Protocol trends');
+    if (unavailable) return res.json(unavailable);
 
     const data = await cached('contractsProtocolTrend:soroswap:pubnet:v2', TTL.FINALIZED, async () => {
       const rows = await fetchDuneQueryResults(DUNE_SOROSWAP_TREND_QUERY_ID);
@@ -153,7 +145,14 @@ router.get('/protocol-trend', async (req, res, next) => {
       // works even if this second query isn't configured, it just won't have a
       // "what for" answer to go with the "how often" one.
       let functionTotals = [];
-      let dailyByFunction = {};
+      // Object.create(null) rather than {} — the key here is a Soroban
+      // contract's own author-chosen function name (fully attacker-defined),
+      // and this codebase's own data has already shown real, unusual names in
+      // the wild ("yeet"). A plain {} with a key literally named "__proto__"
+      // wouldn't create an own enumerable property — it would reassign the
+      // object's prototype via the inherited setter, silently dropping that
+      // function's data from the JSON response with no error anywhere.
+      let dailyByFunction = Object.create(null);
       if (duneConfigured(DUNE_SOROSWAP_FUNCTIONS_QUERY_ID)) {
         const fnRows = await fetchDuneQueryResults(DUNE_SOROSWAP_FUNCTIONS_QUERY_ID);
         const totals = new Map();
@@ -205,12 +204,8 @@ const NETWORK_TRADES_MIN_NAME_LEN = 3; // drops cryptic 1-2 char names (e.g. "s"
 router.get('/network-trading-activity', async (req, res, next) => {
   try {
     const net = resolveNetwork(req.query.network);
-    if (net.key !== 'pubnet') {
-      return res.json({ available: false, reason: 'Network-wide trading activity is pubnet-only.' });
-    }
-    if (!duneConfigured(DUNE_NETWORK_TRADES_QUERY_ID)) {
-      return res.json({ available: false, reason: 'Dune isn\'t configured on the server (DUNE_API_KEY/DUNE_NETWORK_TRADES_QUERY_ID).' });
-    }
+    const unavailable = duneRouteUnavailable(net, DUNE_NETWORK_TRADES_QUERY_ID, 'DUNE_NETWORK_TRADES_QUERY_ID', 'Network-wide trading activity');
+    if (unavailable) return res.json(unavailable);
 
     const data = await cached('contractsNetworkTradingActivity:pubnet', TTL.FINALIZED, async () => {
       const rows = await fetchDuneQueryResults(DUNE_NETWORK_TRADES_QUERY_ID);
@@ -231,7 +226,9 @@ router.get('/network-trading-activity', async (req, res, next) => {
         .sort((a, b) => b.callCount - a.callCount)
         .slice(0, NETWORK_TRADES_TOP_N);
 
-      const dailyByFunction = {};
+      // Object.create(null), not {} — see the /protocol-trend route above for
+      // why (a function named "__proto__" would silently corrupt a plain object).
+      const dailyByFunction = Object.create(null);
       for (const f of functionTotals) dailyByFunction[f.name] = dailyRaw.get(f.name) || [];
 
       return {
@@ -262,18 +259,18 @@ const PROTOCOL_FUNCTIONS_TOP_N = 15; // per protocol, same display-scope cap as 
 // covering more protocols in one query via a contract-address-to-protocol-name
 // lookup built from StellarExpert's Directory API (see CLAUDE.md's "Verified
 // facts" section) rather than hand-verified addresses per protocol.
+//
+// Row shape (r.protocol_name, r.function_name, r.call_count) verified live
+// against the actual saved query (dune.com/queries/8365006): real function
+// names came back per protocol (Blend's top was "submit" at 498K calls — a
+// lending action, not a swap, confirming the no-swap-filter design choice
+// above was right; Soroswap's top was "swap_exact_tokens_for_tokens" at 192K;
+// Phoenix and Sushi came back with real, distinct call patterns too).
 router.get('/protocol-functions', async (req, res, next) => {
   try {
     const net = resolveNetwork(req.query.network);
-    if (net.key !== 'pubnet') {
-      return res.json({ available: false, reason: 'Protocol usage breakdown is pubnet-only.' });
-    }
-    if (!duneConfigured(DUNE_PROTOCOL_FUNCTIONS_QUERY_ID)) {
-      return res.json({
-        available: false,
-        reason: 'Dune isn\'t configured on the server (DUNE_API_KEY/DUNE_PROTOCOL_FUNCTIONS_QUERY_ID).',
-      });
-    }
+    const unavailable = duneRouteUnavailable(net, DUNE_PROTOCOL_FUNCTIONS_QUERY_ID, 'DUNE_PROTOCOL_FUNCTIONS_QUERY_ID', 'Protocol usage breakdown');
+    if (unavailable) return res.json(unavailable);
 
     const data = await cached('contractsProtocolFunctions:pubnet', TTL.FINALIZED, async () => {
       const rows = await fetchDuneQueryResults(DUNE_PROTOCOL_FUNCTIONS_QUERY_ID);
@@ -289,7 +286,11 @@ router.get('/protocol-functions', async (req, res, next) => {
         byProtocol.set(protocol, fnTotals);
       }
 
-      const protocols = {};
+      // Object.create(null), not {} — protocol names here come from the Dune
+      // query's VALUES lookup (our own choosing, lower risk than a contract's
+      // own function name), but same defensive shape as dailyByFunction above
+      // for consistency.
+      const protocols = Object.create(null);
       for (const [protocol, fnTotals] of byProtocol) {
         const functionTotals = Array.from(fnTotals.entries())
           .map(([name, callCount]) => ({ name, callCount }))
@@ -440,71 +441,87 @@ async function fetchViaRpcEvents(net, horizon, contractId, startMs, endMs) {
 }
 
 async function fetchViaHorizonFallback(horizon, networkKey, contractId, start, end, passphrase) {
-  const [startSeq, endSeq] = await Promise.all([
-    ledgerSequenceForTimestamp(horizon, networkKey, start),
-    ledgerSequenceForTimestamp(horizon, networkKey, end),
-  ]);
+  // Every other best-effort external call in this file degrades gracefully
+  // rather than failing the whole request (see fetchViaRpcEvents above, fixed
+  // for exactly this reason in an earlier round) — this function previously
+  // didn't, so a transient Horizon failure anywhere in its ledger-sequence
+  // lookup, range fetch, or per-transaction envelope fetches would reject the
+  // whole /:id/activity response via Promise.all, discarding an already-
+  // successful events segment too.
+  try {
+    const [startSeq, endSeq] = await Promise.all([
+      ledgerSequenceForTimestamp(horizon, networkKey, start),
+      ledgerSequenceForTimestamp(horizon, networkKey, end),
+    ]);
 
-  const candidates = [];
-  const { truncated } = await fetchRangeParallel(horizon, '/operations', startSeq, endSeq, {
-    ledgersPerChunk: 20, // see payments.js for why: op density per ledger varies
-    maxRecords: 10_000,
-    onPage: (records) => {
-      for (const op of records) {
-        if (op.type === 'invoke_host_function') candidates.push(op);
-      }
-    },
-  });
+    const candidates = [];
+    const { truncated } = await fetchRangeParallel(horizon, '/operations', startSeq, endSeq, {
+      ledgersPerChunk: 20, // see payments.js for why: op density per ledger varies
+      maxRecords: 10_000,
+      onPage: (records) => {
+        for (const op of records) {
+          if (op.type === 'invoke_host_function') candidates.push(op);
+        }
+      },
+    });
 
-  // Horizon's JSON for invoke_host_function ops doesn't expose the invoked
-  // contract's address as plain text — it's only recoverable from the
-  // transaction's raw XDR. Decode each candidate transaction and check its
-  // operations properly, rather than string-matching against encoded bytes
-  // (which can never match — that was the bug in the previous version).
-  //
-  // Fetching each unique transaction's envelope is independent work, so it
-  // runs with bounded concurrency rather than one-at-a-time — same rationale
-  // as fetchRangeParallel above, just for a different shape of fetch.
-  const uniqueHashes = Array.from(new Set(candidates.map((op) => op.transaction_hash)));
-  const matchedHashes = new Set();
-  const CONCURRENCY = 6;
-  let nextIdx = 0;
-  async function worker() {
-    while (nextIdx < uniqueHashes.length) {
-      const hash = uniqueHashes[nextIdx++];
-      const tx = await horizon.get(`/transactions/${hash}`);
-      if (transactionTouchesContract(tx.envelope_xdr, passphrase, contractId)) {
-        matchedHashes.add(hash);
+    // Horizon's JSON for invoke_host_function ops doesn't expose the invoked
+    // contract's address as plain text — it's only recoverable from the
+    // transaction's raw XDR. Decode each candidate transaction and check its
+    // operations properly, rather than string-matching against encoded bytes
+    // (which can never match — that was the bug in the previous version).
+    //
+    // Fetching each unique transaction's envelope is independent work, so it
+    // runs with bounded concurrency rather than one-at-a-time — same rationale
+    // as fetchRangeParallel above, just for a different shape of fetch.
+    const uniqueHashes = Array.from(new Set(candidates.map((op) => op.transaction_hash)));
+    const matchedHashes = new Set();
+    const CONCURRENCY = 6;
+    let nextIdx = 0;
+    async function worker() {
+      while (nextIdx < uniqueHashes.length) {
+        const hash = uniqueHashes[nextIdx++];
+        const tx = await horizon.get(`/transactions/${hash}`);
+        if (transactionTouchesContract(tx.envelope_xdr, passphrase, contractId)) {
+          matchedHashes.add(hash);
+        }
       }
     }
-  }
-  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, uniqueHashes.length) || 1 }, worker));
+    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, uniqueHashes.length) || 1 }, worker));
 
-  // Built once, O(1) lookups below instead of a candidates.find() per matched
-  // hash — candidates can hold up to MAX_OPS (10,000) entries, so a linear scan
-  // per match scaled badly on a busy contract near that cap. Keep the FIRST op
-  // per hash, matching what candidates.find() returned — a transaction with 2+
-  // invoke_host_function operations (real, e.g. batched/multi-call transactions)
-  // would otherwise silently report sourceAccount from whichever op happened to
-  // be processed last, which depends on parallel chunk-fetch timing, not
-  // transaction operation order. `new Map(candidates.map(...))` (a first attempt
-  // at this same optimization) gets this backwards — later entries overwrite
-  // earlier ones — so it's built explicitly with a "first wins" guard instead.
-  const candidateByHash = new Map();
-  for (const c of candidates) {
-    if (!candidateByHash.has(c.transaction_hash)) candidateByHash.set(c.transaction_hash, c);
-  }
+    // Built once, O(1) lookups below instead of a candidates.find() per matched
+    // hash — candidates can hold up to MAX_OPS (10,000) entries, so a linear scan
+    // per match scaled badly on a busy contract near that cap. Keep the FIRST op
+    // per hash, matching what candidates.find() returned — a transaction with 2+
+    // invoke_host_function operations (real, e.g. batched/multi-call transactions)
+    // would otherwise silently report sourceAccount from whichever op happened to
+    // be processed last, which depends on parallel chunk-fetch timing, not
+    // transaction operation order. `new Map(candidates.map(...))` (a first attempt
+    // at this same optimization) gets this backwards — later entries overwrite
+    // earlier ones — so it's built explicitly with a "first wins" guard instead.
+    const candidateByHash = new Map();
+    for (const c of candidates) {
+      if (!candidateByHash.has(c.transaction_hash)) candidateByHash.set(c.transaction_hash, c);
+    }
 
-  return {
-    mode: 'horizon-fallback',
-    fidelityNote:
-      'Outside Soroban RPC event retention — showing invocation transactions from Horizon (decoded from XDR, no per-event detail).',
-    truncated,
-    invocations: Array.from(matchedHashes).map((hash) => {
-      const op = candidateByHash.get(hash);
-      return { transactionHash: hash, createdAt: op.created_at, sourceAccount: op.source_account };
-    }),
-  };
+    return {
+      mode: 'horizon-fallback',
+      fidelityNote:
+        'Outside Soroban RPC event retention — showing invocation transactions from Horizon (decoded from XDR, no per-event detail).',
+      truncated,
+      invocations: Array.from(matchedHashes).map((hash) => {
+        const op = candidateByHash.get(hash);
+        return { transactionHash: hash, createdAt: op.created_at, sourceAccount: op.source_account };
+      }),
+    };
+  } catch (err) {
+    return {
+      mode: 'horizon-fallback',
+      fidelityNote: `Historical invocation data unavailable for this range: ${err.message}`,
+      truncated: false,
+      invocations: [],
+    };
+  }
 }
 
 function transactionTouchesContract(envelopeXdr, passphrase, contractId) {

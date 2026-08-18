@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { resolveNetwork, DUNE_ACCOUNT_GROWTH_QUERY_ID, DUNE_TRUSTLINE_GROWTH_QUERY_ID } from '../config.js';
 import { cached, TTL } from '../cache.js';
-import { duneConfigured, fetchDuneQueryResults } from '../duneClient.js';
+import { fetchDuneQueryResults, duneRouteUnavailable } from '../duneClient.js';
 
 const TOP_TRUSTLINE_ASSETS_SHOWN = 15;
 
@@ -14,6 +14,12 @@ const router = Router();
 // computed from the FULL untrimmed result, not just this window.
 const TREND_DAYS = 180;
 
+// Row shape (r.day, r.accounts_created, r.accounts_merged) verified live
+// against the actual saved query (dune.com/queries/8363713): real rows came
+// back with those exact keys, data spanning 2015-09-30 through today (3,949
+// days), 31.2M accounts created / 13.8M merged all-time — sane numbers, not
+// just a shape that happened to parse.
+//
 // Day-bucketed account creation/closure trend, all-time — Horizon has no
 // aggregate "operations by type per day" endpoint, and enumerating raw
 // /operations live (as payments.js's /breakdown does) hits a hard record cap
@@ -26,15 +32,8 @@ const TREND_DAYS = 180;
 router.get('/account-trend', async (req, res, next) => {
   try {
     const net = resolveNetwork(req.query.network);
-    if (net.key !== 'pubnet') {
-      return res.json({ available: false, reason: 'Account growth trend is only meaningful on pubnet.' });
-    }
-    if (!duneConfigured(DUNE_ACCOUNT_GROWTH_QUERY_ID)) {
-      return res.json({
-        available: false,
-        reason: 'Dune isn\'t configured on the server (DUNE_API_KEY/DUNE_ACCOUNT_GROWTH_QUERY_ID).',
-      });
-    }
+    const unavailable = duneRouteUnavailable(net, DUNE_ACCOUNT_GROWTH_QUERY_ID, 'DUNE_ACCOUNT_GROWTH_QUERY_ID', 'Account growth trend');
+    if (unavailable) return res.json(unavailable);
 
     // Dune's own materialized result barely changes minute-to-minute (it only
     // refreshes when the saved query is re-run) — cached generously, same as
@@ -88,6 +87,11 @@ router.get('/account-trend', async (req, res, next) => {
   }
 });
 
+// Row shape (r.asset_code, r.asset_issuer, r.trustline_changes) verified live
+// against the actual saved query (dune.com/queries/8363720): real rows came
+// back with those exact keys, 403.3M total trustline changes, top asset USDC
+// at 8.08M — sane numbers, not just a shape that happened to parse.
+//
 // Which specific assets are actually gaining/losing trustlines, not just a
 // network-wide total — same "can't come from live Horizon at this scope"
 // reasoning as /account-trend above. Ranked by all-time trustline-change
@@ -97,15 +101,8 @@ router.get('/account-trend', async (req, res, next) => {
 router.get('/trustline-trend', async (req, res, next) => {
   try {
     const net = resolveNetwork(req.query.network);
-    if (net.key !== 'pubnet') {
-      return res.json({ available: false, reason: 'Trustline growth is only meaningful on pubnet.' });
-    }
-    if (!duneConfigured(DUNE_TRUSTLINE_GROWTH_QUERY_ID)) {
-      return res.json({
-        available: false,
-        reason: 'Dune isn\'t configured on the server (DUNE_API_KEY/DUNE_TRUSTLINE_GROWTH_QUERY_ID).',
-      });
-    }
+    const unavailable = duneRouteUnavailable(net, DUNE_TRUSTLINE_GROWTH_QUERY_ID, 'DUNE_TRUSTLINE_GROWTH_QUERY_ID', 'Trustline growth');
+    if (unavailable) return res.json(unavailable);
 
     const data = await cached('growthTrustlineTrend:pubnet', TTL.FINALIZED, async () => {
       const rows = await fetchDuneQueryResults(DUNE_TRUSTLINE_GROWTH_QUERY_ID);

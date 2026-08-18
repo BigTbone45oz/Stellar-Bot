@@ -17,6 +17,25 @@ export function duneConfigured(queryId) {
   return Boolean(DUNE_API_KEY && queryId);
 }
 
+// Shared "is this route even reachable" guard — every Dune-backed route in
+// this app is pubnet-only (Dune doesn't index testnet) and needs its own
+// query ID configured, and until this was pulled out, that pair of checks
+// was copy-pasted six times across contracts.js/growth.js with slightly
+// different reason strings each time. `envVarName` is the literal env var
+// name (e.g. "DUNE_ACCOUNT_GROWTH_QUERY_ID") for the error message — can't be
+// recovered from `queryId`'s value alone once it's unset. Returns the
+// { available: false, reason } payload to respond with immediately, or null
+// if the route should proceed.
+export function duneRouteUnavailable(net, queryId, envVarName, whatThisIs) {
+  if (net.key !== 'pubnet') {
+    return { available: false, reason: `${whatThisIs} is only meaningful on pubnet.` };
+  }
+  if (!duneConfigured(queryId)) {
+    return { available: false, reason: `Dune isn't configured on the server (DUNE_API_KEY/${envVarName}).` };
+  }
+  return null;
+}
+
 export async function fetchDuneQueryResults(queryId, timeoutMs = 15_000) {
   if (!duneConfigured(queryId)) {
     throw httpError(501, 'Dune isn\'t configured — set DUNE_API_KEY and the relevant query ID in server/.env');
