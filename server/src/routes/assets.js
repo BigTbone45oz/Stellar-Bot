@@ -358,7 +358,9 @@ router.get('/price-history', async (req, res, next) => {
       // of chunks claimed bounds both the returned size and the actual
       // number of Horizon requests made, instead of firing them all and
       // throwing most away via a post-hoc slice. Same "cap chunks claimed,
-      // mark truncated if any remain unclaimed" shape as rangeFetch.js.
+      // mark truncated if any remain unclaimed" shape as rangeFetch.js — and,
+      // like that file, not using workerPool.js's runWorkerPool here since it
+      // always drains the full item list rather than stopping early at a cap.
       const maxChunks = Math.ceil(RECORDS_CAP / PAGE_LIMIT);
 
       const chunkResults = new Array(chunkBounds.length);

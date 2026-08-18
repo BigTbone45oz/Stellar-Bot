@@ -84,7 +84,9 @@ export async function fetchRangeParallel(
   // concurrently and can finish in any order, the chunks processed by the
   // time maxRecords is hit are always a contiguous prefix in sequence order —
   // required for the UI's "showing the first portion fetched" truncation
-  // message to be accurate.
+  // message to be accurate. Not using workerPool.js's runWorkerPool here (or
+  // in /price-history's near-identical loop) since both need this early-stop
+  // check mid-loop; runWorkerPool always drains its full item list.
   let nextChunk = 0;
   async function worker() {
     while (nextChunk < chunkBounds.length) {
