@@ -63,7 +63,21 @@ export async function fetchDuneQueryResults(queryId, timeoutMs = 15_000) {
     if (data.is_execution_finished === false || (data.state && data.state !== 'QUERY_STATE_COMPLETED')) {
       throw httpError(502, `Dune query hasn't finished executing (state: ${data.state || 'unknown'}) — try again shortly`);
     }
-    return data.result?.rows || [];
+    const rows = data.result?.rows || [];
+    // Verified live (2026-08): Dune's /results endpoint returned the FULL result
+    // set for a 499,231-row query (metadata.total_row_count === rows.length), not
+    // a default-limited page — so this isn't a known-active bug today. But every
+    // other range-fetching path in this app (rangeFetch.js, /price-history,
+    // fetchViaRpcEvents) surfaces a `truncated` signal rather than assuming a cap
+    // can never bite, so this does the same defensively: attached as a property
+    // on the array itself (not a new return shape) so existing call sites don't
+    // need to change to keep working — only the ones that want to surface it read
+    // `rows.truncated`.
+    const totalRowCount = data.result?.metadata?.total_row_count;
+    if (typeof totalRowCount === 'number' && totalRowCount > rows.length) {
+      rows.truncated = true;
+    }
+    return rows;
   } catch (err) {
     if (err.name === 'AbortError') throw httpError(504, `Dune query lookup timed out after ${timeoutMs}ms`);
     if (err.status) throw err;

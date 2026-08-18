@@ -165,6 +165,12 @@ export default function SmartContracts({ network }) {
       )}
       {!allTimeLoading && allTime?.available && (
         <>
+          {allTime.truncated && (
+            <div className="chart-note-banner">
+              Dune's result set for this query was larger than what came back — totals below may
+              undercount.
+            </div>
+          )}
           <div className="stat-row">
             <StatCard label="Total moved, all time (USD)" value={formatUsd(allTime.totalMovedUsd)} />
             <StatCard label="Assets priced" value={`${allTime.pricedAssetCount} / ${allTime.assetCount}`} />
@@ -222,6 +228,12 @@ export default function SmartContracts({ network }) {
       )}
       {!networkTradesLoading && networkTrades?.available && (
         <>
+          {networkTrades.truncated && (
+            <div className="chart-note-banner">
+              Dune's result set for this query was larger than what came back — totals below may
+              undercount.
+            </div>
+          )}
           <div className="stat-row">
             <StatCard label="Matched trade calls, all time" value={networkTrades.totalMatchedCalls.toLocaleString()} />
           </div>
@@ -290,6 +302,12 @@ export default function SmartContracts({ network }) {
       {protocolFunctionsError && <div className="chart-state error">{protocolFunctionsError}</div>}
       {!protocolFunctionsLoading && !protocolFunctionsError && protocolFunctions && !protocolFunctions.available && (
         <div className="chart-state">{protocolFunctions.reason}</div>
+      )}
+      {!protocolFunctionsLoading && protocolFunctions?.truncated && (
+        <div className="chart-note-banner">
+          Dune's result set for this query was larger than what came back — totals below may
+          undercount.
+        </div>
       )}
       {!protocolFunctionsLoading && protocolFunctions?.available && protocolFunctionsOptions.length > 0 && (
         <div className="table-wrap">
@@ -363,6 +381,12 @@ export default function SmartContracts({ network }) {
       {protocolTrendError && <div className="chart-state error">{protocolTrendError}</div>}
       {!protocolTrendLoading && !protocolTrendError && protocolTrend && !protocolTrend.available && (
         <div className="chart-state">{protocolTrend.reason}</div>
+      )}
+      {!protocolTrendLoading && protocolTrend?.truncated && (
+        <div className="chart-note-banner">
+          Dune's result set for this query was larger than what came back — totals below may
+          undercount.
+        </div>
       )}
       {!protocolTrendLoading && protocolTrend?.available && (
         <>

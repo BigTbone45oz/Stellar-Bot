@@ -59,16 +59,19 @@ router.get('/all-time', async (req, res, next) => {
     // asset's price is itself already cached at TTL.RECENT inside
     // priceMovementList/fetchAssetUsdPrice, so most requests just do fresh
     // math against an already-cached recent price, not a fresh network call.
-    const rawAssets = await cached('contractsAllTimeRaw:pubnet', TTL.FINALIZED, async () => {
+    const { assets: rawAssets, truncated } = await cached('contractsAllTimeRaw:pubnet', TTL.FINALIZED, async () => {
       const rows = await fetchDuneQueryResults(DUNE_QUERY_ID);
-      return rows
-        .map((r) => ({
-          code: r.asset_code || 'XLM',
-          issuer: r.asset_issuer || null,
-          totalAmount: Number(r.total_amount) || 0,
-          effectCount: Number(r.effect_count) || 0,
-        }))
-        .filter((a) => a.totalAmount > 0);
+      return {
+        truncated: Boolean(rows.truncated),
+        assets: rows
+          .map((r) => ({
+            code: r.asset_code || 'XLM',
+            issuer: r.asset_issuer || null,
+            totalAmount: Number(r.total_amount) || 0,
+            effectCount: Number(r.effect_count) || 0,
+          }))
+          .filter((a) => a.totalAmount > 0),
+      };
     });
 
     // Cloned, not mutated in place — `rawAssets` is the object `cached()`
@@ -91,6 +94,7 @@ router.get('/all-time', async (req, res, next) => {
 
     res.json({
       available: true,
+      truncated,
       totalMovedUsd,
       pricedAssetCount,
       assetCount: assets.length,
@@ -129,6 +133,7 @@ router.get('/protocol-trend', async (req, res, next) => {
 
     const data = await cached('contractsProtocolTrend:soroswap:pubnet:v2', TTL.FINALIZED, async () => {
       const rows = await fetchDuneQueryResults(DUNE_SOROSWAP_TREND_QUERY_ID);
+      let truncated = Boolean(rows.truncated);
 
       const byDay = new Map();
       for (const r of rows) {
@@ -154,6 +159,7 @@ router.get('/protocol-trend', async (req, res, next) => {
       let dailyByFunction = Object.create(null);
       if (duneConfigured(DUNE_SOROSWAP_FUNCTIONS_QUERY_ID)) {
         const fnRows = await fetchDuneQueryResults(DUNE_SOROSWAP_FUNCTIONS_QUERY_ID);
+        truncated = truncated || Boolean(fnRows.truncated);
         const totals = new Map();
         for (const r of fnRows) {
           const name = r.function_name || 'unknown';
@@ -168,6 +174,7 @@ router.get('/protocol-trend', async (req, res, next) => {
 
       return {
         available: true,
+        truncated,
         protocol: 'Soroswap',
         totalInvokeCalls: daily.reduce((sum, d) => sum + d.invokeCount, 0),
         totalPoolsCreated: daily.reduce((sum, d) => sum + d.createCount, 0),
@@ -232,6 +239,7 @@ router.get('/network-trading-activity', async (req, res, next) => {
 
       return {
         available: true,
+        truncated: Boolean(rows.truncated),
         totalMatchedCalls: Array.from(totals.values()).reduce((sum, c) => sum + c, 0),
         functionTotals,
         dailyByFunction,
@@ -300,7 +308,7 @@ router.get('/protocol-functions', async (req, res, next) => {
         };
       }
 
-      return { available: true, protocols };
+      return { available: true, truncated: Boolean(rows.truncated), protocols };
     });
 
     res.json(data);

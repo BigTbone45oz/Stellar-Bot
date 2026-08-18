@@ -157,8 +157,14 @@ export default function Assets({ network }) {
   // Price/volume history for whichever asset is expanded — only fires for a
   // non-native asset (XLM has no issuer to chart against itself; see the
   // native branch in renderDetail). `expanded` itself is reset by the
-  // topAssets hook's onReset above; this hook resets independently too
-  // (network is in its own resetDeps), so no cross-hook wiring is needed.
+  // topAssets hook's onReset above, but that reset lands one render AFTER
+  // this hook's own resetDeps (which also include `network`) fire — both
+  // hooks' deps-effects run in the same commit, so on a network switch this
+  // effect can still see the OLD `expanded` alongside the NEW `network` for
+  // one pass. `expandedForNetwork` (set in toggleExpand) guards against that:
+  // if it doesn't match the current network, this is exactly that stale
+  // window, so `enabled` is false rather than firing a real request for the
+  // wrong asset/network pairing.
   const {
     data: historyData,
     error,
@@ -166,7 +172,7 @@ export default function Assets({ network }) {
   } = useAsyncResource(
     () => api.priceHistory(network, expanded.code, expanded.issuer, range.start, range.end),
     [network, expanded, range.start, range.end],
-    { enabled: Boolean(expanded) && !expanded.native }
+    { enabled: Boolean(expanded) && !expanded.native && expanded?.expandedForNetwork === network }
   );
   const history = historyData?.records ?? null;
   const historyTruncated = historyData?.truncated ?? false;
@@ -180,7 +186,14 @@ export default function Assets({ network }) {
 
   function toggleExpand(asset) {
     setOpenRatingDim(null);
-    setExpanded((prev) => (prev && assetKey(prev) === assetKey(asset) ? null : asset));
+    // Tagged with the network it was expanded under — see the price-history
+    // hook below for why: on a network switch, this hook's own resetDeps
+    // (which include `network`) fire in the SAME commit as the topAssets
+    // hook's onReset (which clears `expanded`), but React effects for that
+    // commit still see THIS render's `expanded` value — the clear only takes
+    // effect next render. Without the tag, that one-render window would fire
+    // a real request for the OLD asset against the NEW network.
+    setExpanded((prev) => (prev && assetKey(prev) === assetKey(asset) ? null : { ...asset, expandedForNetwork: network }));
   }
 
   function goToPage(next) {

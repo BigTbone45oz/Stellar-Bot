@@ -79,6 +79,7 @@ router.get('/account-trend', async (req, res, next) => {
 
       return {
         available: true,
+        truncated: Boolean(rows.truncated),
         daily,
         totalAccountsCreated,
         totalAccountsMerged,
@@ -127,6 +128,7 @@ router.get('/trustline-trend', async (req, res, next) => {
 
       return {
         available: true,
+        truncated: Boolean(rows.truncated),
         totalTrustlineChanges,
         assetTotals: allAssets.slice(0, TOP_TRUSTLINE_ASSETS_SHOWN),
       };

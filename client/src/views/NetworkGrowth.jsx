@@ -54,6 +54,12 @@ export default function NetworkGrowth({ network }) {
       {!trendLoading && !trendError && trend && !trend.available && (
         <div className="chart-state">{trend.reason}</div>
       )}
+      {!trendLoading && trend?.truncated && (
+        <div className="chart-note-banner">
+          Dune's result set for this query was larger than what came back — totals below may
+          undercount.
+        </div>
+      )}
       {!trendLoading && trend?.available && (
         <>
           <div className="stat-row">
@@ -84,6 +90,12 @@ export default function NetworkGrowth({ network }) {
       {trustlinesError && <div className="chart-state error">{trustlinesError}</div>}
       {!trustlinesLoading && !trustlinesError && trustlines && !trustlines.available && (
         <div className="chart-state">{trustlines.reason}</div>
+      )}
+      {!trustlinesLoading && trustlines?.truncated && (
+        <div className="chart-note-banner">
+          Dune's result set for this query was larger than what came back — totals below may
+          undercount.
+        </div>
       )}
       {!trustlinesLoading && trustlines?.available && (
         <div className="table-wrap">
