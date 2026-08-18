@@ -1,8 +1,9 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import DateRangePicker from '../components/DateRangePicker.jsx';
 import ChartPanel from '../components/ChartPanel.jsx';
 import { defaultRange } from '../dateUtils.js';
+import { useAsyncResource } from '../hooks/useAsyncResource.js';
 
 const PAGE_SIZE = 15;
 const VOLUME_WINDOWS = [
@@ -48,29 +49,8 @@ function formatNum(n) {
 
 export default function Assets({ network }) {
   const [code, setCode] = useState('');
-  const [results, setResults] = useState([]);
   const [range, setRange] = useState(defaultRange(720)); // 30 days — no truncation risk here,
                                                             // trade_aggregations is server-aggregated by Horizon
-  const [history, setHistory] = useState(null);
-  const [historyTruncated, setHistoryTruncated] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-  // Separate from `error` above (which is price-history's) — they used to share
-  // one state variable, so a failed search showed no feedback (error was only
-  // ever rendered next to a ChartPanel, not the search box) and a later
-  // price-history failure could show stale text mislabeled as belonging to a
-  // new asset.
-  const [searchError, setSearchError] = useState(null);
-  const [searched, setSearched] = useState(false); // distinguishes "no search yet" from "search returned nothing"
-  // Same reasoning as Accounts.jsx/Trades.jsx: search() is a manual trigger with
-  // no cleanup-based cancellation, so a network switch (which resets `results`
-  // below) or a second rapid search could otherwise let a stale response land
-  // after the reset already happened.
-  const searchRequestIdRef = useRef(0);
-
-  const [topAssets, setTopAssets] = useState([]);
-  const [topLoading, setTopLoading] = useState(false);
-  const [topError, setTopError] = useState(null);
   const [page, setPage] = useState(0);
 
   // Per-asset detail lazily fetched only for the currently visible page — real display
@@ -83,88 +63,39 @@ export default function Assets({ network }) {
   const [expanded, setExpanded] = useState(null);
   const [openRatingDim, setOpenRatingDim] = useState(null);
 
+  const {
+    data: topAssetsData,
+    error: topError,
+    loading: topLoading,
+  } = useAsyncResource(() => api.topAssets(network), [network], {
+    // page/details/expanded/openRatingDim aren't fetched data of their own —
+    // they're plain UI state scoped to whichever network's top-100 table is
+    // showing, so they're reset here rather than needing their own hooks.
+    // (The search and price-history state below don't need to be reset here
+    // too — each already has `network` in its own resetDeps, so each resets
+    // itself independently the moment the network changes.)
+    onReset: () => {
+      setPage(0);
+      setDetails({});
+      setExpanded(null);
+      setOpenRatingDim(null);
+    },
+  });
+  const topAssets = topAssetsData || [];
+
   const pageCount = Math.max(1, Math.ceil(topAssets.length / PAGE_SIZE));
   const pageAssets = useMemo(
     () => topAssets.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE),
     [topAssets, page]
   );
 
-  // Computed once and reused by both charts below, instead of mapping the
-  // same array twice per render.
-  const chartData = useMemo(
-    () => history?.map((h) => ({ ...h, date: new Date(h.timestamp).toISOString().slice(0, 10) })),
-    [history]
-  );
-
-  async function search() {
-    if (!code) return;
-    const myRequestId = ++searchRequestIdRef.current;
-    setSearchError(null);
-    setSearched(true);
-    try {
-      const data = await api.assetSearch(network, code);
-      if (searchRequestIdRef.current !== myRequestId) return; // superseded — don't apply a stale result
-      setResults(data);
-    } catch (e) {
-      if (searchRequestIdRef.current !== myRequestId) return;
-      setResults([]); // don't leave the previous (unrelated) search's results on screen
-      setSearchError(e.message);
-    }
-  }
-
-  function toggleExpand(asset) {
-    setOpenRatingDim(null);
-    setExpanded((prev) => (prev && assetKey(prev) === assetKey(asset) ? null : asset));
-  }
-
-  function goToPage(next) {
-    setExpanded(null);
-    setOpenRatingDim(null);
-    setPage(next);
-  }
-
-  useEffect(() => {
-    let cancelled = false;
-    setTopLoading(true);
-    setTopError(null);
-    setPage(0);
-    setDetails({});
-    // Without this, the previous network's top-100 table stayed fully
-    // rendered underneath the "Loading…" state until the new fetch
-    // resolved — and the per-page detail effect below (keyed on
-    // [network, pageAssets, volumeWindow]) would immediately re-fire using
-    // the new network but the still-stale pageAssets, querying the new
-    // network's Horizon with the old network's asset identifiers.
-    setTopAssets([]);
-    // These weren't reset on network change before — a code search or expanded
-    // asset from the previous network stayed on screen with nothing indicating
-    // it belonged to a different network than the one now selected. Worse for
-    // `expanded`: if it survived and wasn't one of the new network's pageAssets,
-    // the price-history effect below would re-fetch it against the *new*
-    // network's Horizon while still showing the old network's code/issuer.
-    searchRequestIdRef.current += 1; // invalidate any in-flight search from before the switch
-    setResults([]);
-    setSearched(false);
-    setSearchError(null);
-    setExpanded(null);
-    setOpenRatingDim(null);
-    setHistory(null);
-    setHistoryTruncated(false);
-    api
-      .topAssets(network)
-      .then((d) => !cancelled && setTopAssets(d))
-      .catch((e) => !cancelled && setTopError(e.message))
-      .finally(() => !cancelled && setTopLoading(false));
-    return () => {
-      cancelled = true;
-    };
-  }, [network]);
-
   // Fetch name/liquidity/windowed-volume for whichever 15 assets are on-screen right
   // now — never for all 100 at once. Re-fetches when the page or volume window changes;
   // results accumulate in `details` so flipping back to an already-seen page is instant.
   // Native XLM is included too — the server computes it against a reference pair
-  // rather than leaving it blank (see detailsKeyFor).
+  // rather than leaving it blank (see detailsKeyFor). Not a useAsyncResource: this is
+  // a best-effort MERGE into existing `details` (not a replace), silently swallows
+  // errors, and has no loading/error state of its own — a genuinely different shape.
   useEffect(() => {
     if (pageAssets.length === 0) return;
     let cancelled = false;
@@ -178,34 +109,58 @@ export default function Assets({ network }) {
     };
   }, [network, pageAssets, volumeWindow]);
 
-  useEffect(() => {
-    if (!expanded || expanded.native) {
-      setHistory(null);
-      setHistoryTruncated(false);
-      return;
-    }
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-    // The early-return branch above already clears these when there's no
-    // asset expanded — this branch (an actual fetch about to fire) needs the
-    // same reset, or a failed/superseded refetch leaves the previous asset's
-    // truncation banner and history on screen next to the new error.
-    setHistory(null);
-    setHistoryTruncated(false);
-    api
-      .priceHistory(network, expanded.code, expanded.issuer, range.start, range.end)
-      .then((d) => {
-        if (cancelled) return;
-        setHistory(d.records);
-        setHistoryTruncated(d.truncated);
-      })
-      .catch((e) => !cancelled && setError(e.message))
-      .finally(() => !cancelled && setLoading(false));
-    return () => {
-      cancelled = true;
-    };
-  }, [network, expanded, range.start, range.end]);
+  // Manual, code-triggered search — enabled: false, same shape as Accounts.jsx/
+  // Trades.jsx. `network` is still in resetDeps so a network switch clears a
+  // previous search's results even though nothing auto-fetches.
+  const {
+    data: searchResults,
+    error: searchError,
+    run: runSearch,
+  } = useAsyncResource((c) => api.assetSearch(network, c), [network], { enabled: false });
+  const results = searchResults || [];
+  // "Searched, found nothing" vs. "never searched" — same collapse as
+  // Trades.jsx's `loaded`: both start null and only one of them is non-null
+  // once a search actually resolves.
+  const searched = searchResults !== null || searchError !== null;
+
+  function search() {
+    if (code) runSearch(code);
+  }
+
+  // Price/volume history for whichever asset is expanded — only fires for a
+  // non-native asset (XLM has no issuer to chart against itself; see the
+  // native branch in renderDetail). `expanded` itself is reset by the
+  // topAssets hook's onReset above; this hook resets independently too
+  // (network is in its own resetDeps), so no cross-hook wiring is needed.
+  const {
+    data: historyData,
+    error,
+    loading,
+  } = useAsyncResource(
+    () => api.priceHistory(network, expanded.code, expanded.issuer, range.start, range.end),
+    [network, expanded, range.start, range.end],
+    { enabled: Boolean(expanded) && !expanded.native }
+  );
+  const history = historyData?.records ?? null;
+  const historyTruncated = historyData?.truncated ?? false;
+
+  // Computed once and reused by both charts below, instead of mapping the
+  // same array twice per render.
+  const chartData = useMemo(
+    () => history?.map((h) => ({ ...h, date: new Date(h.timestamp).toISOString().slice(0, 10) })),
+    [history]
+  );
+
+  function toggleExpand(asset) {
+    setOpenRatingDim(null);
+    setExpanded((prev) => (prev && assetKey(prev) === assetKey(asset) ? null : asset));
+  }
+
+  function goToPage(next) {
+    setExpanded(null);
+    setOpenRatingDim(null);
+    setPage(next);
+  }
 
   function renderDetail(a) {
     const d = details[detailsKeyFor(a)];

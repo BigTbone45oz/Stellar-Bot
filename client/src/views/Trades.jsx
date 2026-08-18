@@ -1,56 +1,23 @@
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import { api } from '../api.js';
+import { useAsyncResource } from '../hooks/useAsyncResource.js';
 
 export default function Trades({ network }) {
   const [code, setCode] = useState('');
   const [issuer, setIssuer] = useState('');
-  const [trades, setTrades] = useState([]);
-  const [error, setError] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [loaded, setLoaded] = useState(false); // distinguishes "never loaded" from "loaded, zero trades"
+  // Manual, button-triggered lookup — enabled: false, same as Accounts.jsx.
+  const {
+    data,
+    error,
+    loading,
+    run: load,
+  } = useAsyncResource((c, iss) => api.recentTrades(network, c, iss), [network], { enabled: false });
 
-  // Same reasoning as Accounts.jsx: a manual lookup, no cleanup-based cancellation
-  // available, so a network switch (or a second rapid click) mid-fetch could
-  // otherwise let a stale response land after this state was already reset.
-  const requestIdRef = useRef(0);
-
-  // Same reasoning as Accounts.jsx — this is a manual lookup, not tied to a
-  // fetch effect on `network`, so without this a previous network's trades
-  // stayed on screen after switching, unlabeled as stale.
-  useEffect(() => {
-    requestIdRef.current += 1;
-    setTrades([]);
-    setError(null);
-    setLoaded(false);
-    // A load() in flight when the switch happens has its id invalidated
-    // above, so its own `finally` guard will never clear `loading` — clear
-    // it here instead, or "Loading…" persists on the new network forever.
-    setLoading(false);
-  }, [network]);
-
-  async function load() {
-    if (!code || !issuer) return;
-    const myRequestId = ++requestIdRef.current;
-    setLoading(true);
-    try {
-      const data = await api.recentTrades(network, code, issuer);
-      if (requestIdRef.current !== myRequestId) return;
-      setTrades(data);
-      setError(null);
-    } catch (e) {
-      if (requestIdRef.current !== myRequestId) return;
-      setError(e.message);
-    } finally {
-      // setLoaded(true) previously ran unconditionally here — a stale response
-      // (e.g. from before a network switch) would still mark the *new* network's
-      // search as "completed, found nothing" even though no request was ever
-      // made against it, since only setTrades/setError/setLoading were guarded.
-      if (requestIdRef.current === myRequestId) {
-        setLoading(false);
-        setLoaded(true);
-      }
-    }
-  }
+  const trades = data || [];
+  // "Loaded, zero trades" vs. "never loaded" no longer needs its own boolean —
+  // data/error are both null until the first request resolves one way or the
+  // other, and both get reset to null together on a network switch.
+  const loaded = data !== null || error !== null;
 
   return (
     <div className="view">
@@ -61,7 +28,7 @@ export default function Trades({ network }) {
       <div className="search-row">
         <input placeholder="Asset code" value={code} onChange={(e) => setCode(e.target.value.trim().toUpperCase())} />
         <input placeholder="Issuer (G...)" value={issuer} onChange={(e) => setIssuer(e.target.value.trim())} />
-        <button className="btn-primary" onClick={load}>
+        <button className="btn-primary" onClick={() => code && issuer && load(code, issuer)}>
           Load trades
         </button>
       </div>

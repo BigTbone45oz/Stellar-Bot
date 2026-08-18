@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { api } from '../api.js';
 import DateRangePicker from '../components/DateRangePicker.jsx';
 import ChartPanel from '../components/ChartPanel.jsx';
 import StatCard from '../components/StatCard.jsx';
 import { defaultRange, OPS_BREAKDOWN_RANGE_PRESETS } from '../dateUtils.js';
 import { operationTypeLabel, operationTypeDescription } from '../opTypes.js';
+import { useAsyncResource } from '../hooks/useAsyncResource.js';
 
 const TOP_PAYMENT_ASSETS_SHOWN = 10;
 
@@ -19,9 +20,10 @@ function formatUsd(n) {
 
 export default function PaymentsOperations({ network }) {
   const [range, setRange] = useState(defaultRange(24));
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
+  const { data, error, loading } = useAsyncResource(
+    () => api.opsBreakdown(network, range.start, range.end),
+    [network, range.start, range.end]
+  );
 
   // Horizon's `type` is a snake_case API identifier (e.g. "path_payment_strict_send"),
   // not a display name — labeled with Stellar's own operation names instead. Keeping
@@ -31,25 +33,6 @@ export default function PaymentsOperations({ network }) {
     () => data?.byType.map((r) => ({ ...r, label: operationTypeLabel(r.type) })),
     [data]
   );
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-    // Without this, a failed refetch (new range/network) would leave the
-    // previous range's data on screen with no error shown for it — the
-    // ChartPanel above has its own error prop, but the network-growth/
-    // payment-volume sections below don't check `error`, only `loading`.
-    setData(null);
-    api
-      .opsBreakdown(network, range.start, range.end)
-      .then((d) => !cancelled && setData(d))
-      .catch((e) => !cancelled && setError(e.message))
-      .finally(() => !cancelled && setLoading(false));
-    return () => {
-      cancelled = true;
-    };
-  }, [network, range.start, range.end]);
 
   return (
     <div className="view">

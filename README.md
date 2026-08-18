@@ -244,6 +244,15 @@ client/                  React + Vite
     dateUtils.js            Shared date-math/range-preset helpers (all views)
     opTypes.js               Horizon operation-type / host-function-type labels+descriptions
     contractFunctions.js      Heuristic descriptions for common Soroban contract function names
+    hooks/
+      useAsyncResource.js     Fetch-with-guaranteed-reset — every fetch effect in this app
+                              (auto-fetch-on-deps-change AND manual/click-triggered) goes
+                              through this, so a new effect can't structurally omit the
+                              "clear stale state before refetching" step the way over a
+                              dozen hand-written effects independently forgot to before
+                              this was extracted
+      usePolledResource.js    Same guarantee, for the one polling case (Overview's
+                              network-health stats — 30s interval + visibilitychange)
     components/          NetworkToggle, DateRangePicker, ChartPanel, StatCard, Tabs
     views/                One file per tab — Overview, Assets, SmartContracts, NetworkGrowth,
                           Protocols, LedgersTransactions, PaymentsOperations, Accounts, Trades

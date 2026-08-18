@@ -1,54 +1,20 @@
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import { api } from '../api.js';
 import { operationTypeLabel } from '../opTypes.js';
+import { useAsyncResource } from '../hooks/useAsyncResource.js';
 
 export default function Accounts({ network }) {
   const [input, setInput] = useState('');
-  const [account, setAccount] = useState(null);
-  const [error, setError] = useState(null);
-  const [loading, setLoading] = useState(false);
-
-  // Manual lookups have no `cancelled`-on-cleanup guard the way automatic fetch
-  // effects elsewhere in this app do, since there's no effect to clean up — a
-  // click, not a dependency change, triggers the fetch. Without this counter, a
-  // network switch mid-lookup could let the old-network response land after the
-  // reset effect below already cleared state (the reset only helps for a
-  // response that had already arrived, not one still in flight), and two rapid
-  // lookups could resolve out of order with the older one overwriting the newer.
-  const requestIdRef = useRef(0);
-
-  // No fetch is tied to `network` here (lookup is manual, by account id) — but
-  // without this, an account looked up on one network stayed on screen after
-  // switching networks, with nothing indicating it was fetched from the network
-  // no longer selected. Clear rather than silently leave stale/wrong-network data.
-  useEffect(() => {
-    requestIdRef.current += 1; // invalidate any in-flight lookup from before the switch
-    setAccount(null);
-    setError(null);
-    // A lookup that was in flight at the moment of the switch has its id
-    // invalidated above, so its own `finally` will never clear `loading`
-    // (that check is what "superseded" means) — clear it here instead, or
-    // the spinner stays on screen indefinitely on the new network.
-    setLoading(false);
-  }, [network]);
-
-  async function lookup(id) {
-    if (!id) return;
-    const myRequestId = ++requestIdRef.current;
-    setLoading(true);
-    setError(null);
-    try {
-      const data = await api.account(network, id);
-      if (requestIdRef.current !== myRequestId) return; // superseded — don't apply a stale result
-      setAccount(data);
-    } catch (e) {
-      if (requestIdRef.current !== myRequestId) return;
-      setError(e.message);
-      setAccount(null);
-    } finally {
-      if (requestIdRef.current === myRequestId) setLoading(false);
-    }
-  }
+  // enabled: false — this is a manual, button-triggered lookup, not an
+  // auto-fetch-on-dep-change. The hook's own [network] resetDeps still fires
+  // on a network switch though, clearing a previous lookup's stale result
+  // (and safely dropping an in-flight one) even though nothing auto-fetches.
+  const {
+    data: account,
+    error,
+    loading,
+    run: lookup,
+  } = useAsyncResource((id) => api.account(network, id), [network], { enabled: false });
 
   return (
     <div className="view">
@@ -57,9 +23,9 @@ export default function Accounts({ network }) {
           placeholder="Paste a Stellar public key (G...)"
           value={input}
           onChange={(e) => setInput(e.target.value.trim())}
-          onKeyDown={(e) => e.key === 'Enter' && lookup(input)}
+          onKeyDown={(e) => e.key === 'Enter' && input && lookup(input)}
         />
-        <button className="btn-primary" onClick={() => lookup(input)}>
+        <button className="btn-primary" onClick={() => input && lookup(input)}>
           Look up
         </button>
       </div>

@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { api } from '../api.js';
 import DateRangePicker from '../components/DateRangePicker.jsx';
 import ChartPanel from '../components/ChartPanel.jsx';
 import { defaultRange } from '../dateUtils.js';
+import { useAsyncResource } from '../hooks/useAsyncResource.js';
 
 // ledgers.js's parallel fetch is capped at 130,000 ledgers (~7.9 days of pubnet
 // history) as a safety valve against runaway ranges — raised from an earlier, more
@@ -22,27 +23,10 @@ const LEDGER_RANGE_PRESETS = [
 
 export default function LedgersTransactions({ network }) {
   const [range, setRange] = useState(defaultRange(48));
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-    // Without this, a failed refetch leaves the previous range/network's
-    // truncation banner on screen (it's only gated on !loading, not !error)
-    // describing data that no longer exists.
-    setData(null);
-    api
-      .ledgerVolume(network, range.start, range.end)
-      .then((d) => !cancelled && setData(d))
-      .catch((e) => !cancelled && setError(e.message))
-      .finally(() => !cancelled && setLoading(false));
-    return () => {
-      cancelled = true;
-    };
-  }, [network, range.start, range.end]);
+  const { data, error, loading } = useAsyncResource(
+    () => api.ledgerVolume(network, range.start, range.end),
+    [network, range.start, range.end]
+  );
 
   return (
     <div className="view">

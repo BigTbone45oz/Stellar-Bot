@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { api } from '../api.js';
 import DateRangePicker from '../components/DateRangePicker.jsx';
 import ChartPanel from '../components/ChartPanel.jsx';
 import StatCard from '../components/StatCard.jsx';
 import { defaultRange, OPS_BREAKDOWN_RANGE_PRESETS } from '../dateUtils.js';
+import { useAsyncResource } from '../hooks/useAsyncResource.js';
 
 export default function NetworkGrowth({ network }) {
   // All-time trend — backed by Dune (see server/src/routes/growth.js). Horizon
@@ -12,45 +13,19 @@ export default function NetworkGrowth({ network }) {
   // "Recent activity" section below does — that approach hits a hard record
   // cap within hours on a busy network (verified live: even a 6h window can
   // exceed it), nowhere near enough for a meaningful trend.
-  const [trend, setTrend] = useState(null);
-  const [trendLoading, setTrendLoading] = useState(false);
-  const [trendError, setTrendError] = useState(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    setTrendLoading(true);
-    setTrendError(null);
-    setTrend(null);
-    api
-      .accountGrowthTrend(network)
-      .then((d) => !cancelled && setTrend(d))
-      .catch((e) => !cancelled && setTrendError(e.message))
-      .finally(() => !cancelled && setTrendLoading(false));
-    return () => {
-      cancelled = true;
-    };
-  }, [network]);
+  const {
+    data: trend,
+    error: trendError,
+    loading: trendLoading,
+  } = useAsyncResource(() => api.accountGrowthTrend(network), [network]);
 
   // Per-asset trustline growth — same Dune-backed reasoning as the account
   // trend above, just broken out by asset instead of network-wide.
-  const [trustlines, setTrustlines] = useState(null);
-  const [trustlinesLoading, setTrustlinesLoading] = useState(false);
-  const [trustlinesError, setTrustlinesError] = useState(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    setTrustlinesLoading(true);
-    setTrustlinesError(null);
-    setTrustlines(null);
-    api
-      .trustlineGrowthTrend(network)
-      .then((d) => !cancelled && setTrustlines(d))
-      .catch((e) => !cancelled && setTrustlinesError(e.message))
-      .finally(() => !cancelled && setTrustlinesLoading(false));
-    return () => {
-      cancelled = true;
-    };
-  }, [network]);
+  const {
+    data: trustlines,
+    error: trustlinesError,
+    loading: trustlinesLoading,
+  } = useAsyncResource(() => api.trustlineGrowthTrend(network), [network]);
 
   // Recent activity — live Horizon, same /api/payments/breakdown route
   // PaymentsOperations.jsx and SmartContracts.jsx already call. New-account/
@@ -60,24 +35,11 @@ export default function NetworkGrowth({ network }) {
   // OPS_BREAKDOWN_RANGE_PRESETS comment) — good for "right now," not for a
   // real historical trend, which is what the all-time section above is for.
   const [range, setRange] = useState(defaultRange(24));
-  const [recent, setRecent] = useState(null);
-  const [recentLoading, setRecentLoading] = useState(false);
-  const [recentError, setRecentError] = useState(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    setRecentLoading(true);
-    setRecentError(null);
-    setRecent(null);
-    api
-      .opsBreakdown(network, range.start, range.end)
-      .then((d) => !cancelled && setRecent(d))
-      .catch((e) => !cancelled && setRecentError(e.message))
-      .finally(() => !cancelled && setRecentLoading(false));
-    return () => {
-      cancelled = true;
-    };
-  }, [network, range.start, range.end]);
+  const {
+    data: recent,
+    error: recentError,
+    loading: recentLoading,
+  } = useAsyncResource(() => api.opsBreakdown(network, range.start, range.end), [network, range.start, range.end]);
 
   return (
     <div className="view">

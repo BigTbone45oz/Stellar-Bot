@@ -2,6 +2,7 @@ import { Fragment, useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import StatCard from '../components/StatCard.jsx';
 import ChartPanel from '../components/ChartPanel.jsx';
+import { useAsyncResource } from '../hooks/useAsyncResource.js';
 
 const TOTAL_OPTION = 'Total (all protocols)';
 
@@ -34,19 +35,30 @@ function formatPct(n) {
 }
 
 export default function Protocols({ network }) {
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
   const [trendSelection, setTrendSelection] = useState(TOTAL_OPTION);
+  const [expandedProtocol, setExpandedProtocol] = useState(null);
+
+  const { data, error, loading } = useAsyncResource(() => api.protocolsRanking(network), [network], {
+    // Without this, a failed refetch (network switch, or a transient
+    // DeFiLlama error) would leave the previous network's ranking table/chart
+    // on screen, rendered alongside the new error, with nothing marking it
+    // stale — and the trend/expand selections would keep pointing at the old
+    // network's protocol names.
+    onReset: () => {
+      setTrendSelection(TOTAL_OPTION);
+      setExpandedProtocol(null);
+    },
+  });
 
   // Real function-call breakdown per protocol (server/src/routes/contracts.js's
   // /protocol-functions, Dune-backed) — fetched once alongside the ranking,
   // not per-row, since it's the same small payload regardless of which row
   // gets expanded.
-  const [protocolFunctions, setProtocolFunctions] = useState(null);
-  const [protocolFunctionsLoading, setProtocolFunctionsLoading] = useState(false);
-  const [protocolFunctionsError, setProtocolFunctionsError] = useState(null);
-  const [expandedProtocol, setExpandedProtocol] = useState(null);
+  const {
+    data: protocolFunctions,
+    error: protocolFunctionsError,
+    loading: protocolFunctionsLoading,
+  } = useAsyncResource(() => api.contractsProtocolFunctions(network), [network]);
 
   // Protocols actually worth offering in the selector — only those DeFiLlama
   // reports daily volume for (TVL-only protocols like lending have no trend data
@@ -61,44 +73,6 @@ export default function Protocols({ network }) {
     if (trendSelection === TOTAL_OPTION) return data.volumeTrend;
     return data.volumeTrendByProtocol[trendSelection] || [];
   }, [data, trendSelection]);
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-    setTrendSelection(TOTAL_OPTION);
-    setExpandedProtocol(null);
-    // Without this, a failed refetch (network switch, or a transient
-    // DeFiLlama error) would leave the previous network's ranking table/chart
-    // on screen, rendered alongside the new error, with nothing marking it stale.
-    setData(null);
-    api
-      .protocolsRanking(network)
-      .then((d) => !cancelled && setData(d))
-      .catch((e) => !cancelled && setError(e.message))
-      .finally(() => !cancelled && setLoading(false));
-    return () => {
-      cancelled = true;
-    };
-  }, [network]);
-
-  useEffect(() => {
-    let cancelled = false;
-    setProtocolFunctionsLoading(true);
-    setProtocolFunctionsError(null);
-    // Without this, switching networks (or a transient failure) leaves the
-    // previous network's function-call data in place — expanding a protocol
-    // row that exists under both networks would silently show stale numbers.
-    setProtocolFunctions(null);
-    api
-      .contractsProtocolFunctions(network)
-      .then((d) => !cancelled && setProtocolFunctions(d))
-      .catch((e) => !cancelled && setProtocolFunctionsError(e.message))
-      .finally(() => !cancelled && setProtocolFunctionsLoading(false));
-    return () => {
-      cancelled = true;
-    };
-  }, [network]);
 
   // If the fetched protocol list no longer contains the currently-selected
   // protocol (network switch, or DeFiLlama's tracked set shifting between

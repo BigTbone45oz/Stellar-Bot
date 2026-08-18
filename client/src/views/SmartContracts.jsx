@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from 'react';
+import { Fragment, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import DateRangePicker from '../components/DateRangePicker.jsx';
 import ChartPanel from '../components/ChartPanel.jsx';
@@ -6,6 +6,9 @@ import StatCard from '../components/StatCard.jsx';
 import { defaultRange, OPS_BREAKDOWN_RANGE_PRESETS } from '../dateUtils.js';
 import { operationTypeLabel, operationTypeDescription, hostFunctionLabel, hostFunctionDescription } from '../opTypes.js';
 import { contractFunctionInfo, movementTypeDescription } from '../contractFunctions.js';
+import { useAsyncResource } from '../hooks/useAsyncResource.js';
+
+const CONTRACT_ID_RE = /^C[A-Z2-7]{55}$/;
 
 const TOP_ASSETS_SHOWN = 10;
 
@@ -31,9 +34,6 @@ const SOROBAN_OP_TYPES = ['extend_footprint_ttl', 'restore_footprint'];
 export default function SmartContracts({ network }) {
   const [contractId, setContractId] = useState('');
   const [range, setRange] = useState(defaultRange(72)); // 3 days
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
 
   // Network-wide totals of "what kind of smart contract operation happened" —
   // reuses the same /api/payments/breakdown route and Horizon fetch the Payments &
@@ -41,26 +41,37 @@ export default function SmartContracts({ network }) {
   // filtered down to the Soroban-relevant rows and with invoke_host_function split
   // into its three underlying actions (call / deploy / upload wasm).
   const [breakdownRange, setBreakdownRange] = useState(defaultRange(24));
-  const [breakdown, setBreakdown] = useState(null);
-  const [breakdownLoading, setBreakdownLoading] = useState(false);
-  const [breakdownError, setBreakdownError] = useState(null);
+  const {
+    data: breakdown,
+    error: breakdownError,
+    loading: breakdownLoading,
+  } = useAsyncResource(
+    () => api.opsBreakdown(network, breakdownRange.start, breakdownRange.end),
+    [network, breakdownRange.start, breakdownRange.end]
+  );
 
   // Since Soroban's mainnet launch, not scoped to any date range — backed by Dune
   // (see server/src/routes/contracts.js's /all-time), since scanning that much
   // Horizon history live isn't feasible.
-  const [allTime, setAllTime] = useState(null);
-  const [allTimeLoading, setAllTimeLoading] = useState(false);
-  const [allTimeError, setAllTimeError] = useState(null);
+  const {
+    data: allTime,
+    error: allTimeError,
+    loading: allTimeLoading,
+  } = useAsyncResource(() => api.contractsAllTime(network), [network]);
 
   // Day-bucketed call-volume trend for Soroswap specifically (the one protocol
   // with confirmed-Soroban contract addresses) — see contracts.js's /protocol-trend.
-  const [protocolTrend, setProtocolTrend] = useState(null);
-  const [protocolTrendLoading, setProtocolTrendLoading] = useState(false);
-  const [protocolTrendError, setProtocolTrendError] = useState(null);
   const [functionTrendSelection, setFunctionTrendSelection] = useState('');
+  const {
+    data: protocolTrend,
+    error: protocolTrendError,
+    loading: protocolTrendLoading,
+  } = useAsyncResource(() => api.contractsProtocolTrend(network), [network], {
+    // Options come from functionTotals (already sorted by call count), so the
+    // default selection is naturally the most-called function, not an arbitrary one.
+    onSuccess: (d) => setFunctionTrendSelection(d.available && d.functionTotals?.length > 0 ? d.functionTotals[0].name : ''),
+  });
 
-  // Options come from functionTotals (already sorted by call count), so the
-  // default selection is naturally the most-called function, not an arbitrary one.
   const functionTrendOptions = useMemo(
     () => (protocolTrend?.functionTotals || []).map((f) => f.name),
     [protocolTrend]
@@ -68,10 +79,14 @@ export default function SmartContracts({ network }) {
 
   // Network-wide (every Soroban contract, not just Soroswap) breakdown of real
   // detected trades by function name — see contracts.js's /network-trading-activity.
-  const [networkTrades, setNetworkTrades] = useState(null);
-  const [networkTradesLoading, setNetworkTradesLoading] = useState(false);
-  const [networkTradesError, setNetworkTradesError] = useState(null);
   const [networkTradeSelection, setNetworkTradeSelection] = useState('');
+  const {
+    data: networkTrades,
+    error: networkTradesError,
+    loading: networkTradesLoading,
+  } = useAsyncResource(() => api.contractsNetworkTradingActivity(network), [network], {
+    onSuccess: (d) => setNetworkTradeSelection(d.available && d.functionTotals?.length > 0 ? d.functionTotals[0].name : ''),
+  });
 
   const networkTradeOptions = useMemo(
     () => (networkTrades?.functionTotals || []).map((f) => f.name),
@@ -83,10 +98,16 @@ export default function SmartContracts({ network }) {
   // signal used elsewhere (network-wide trades, payments.js) since several of
   // these protocols aren't DEXs (Blend is a lending market — a real call there
   // moves one asset, not two, and would be invisible to that filter).
-  const [protocolFunctions, setProtocolFunctions] = useState(null);
-  const [protocolFunctionsLoading, setProtocolFunctionsLoading] = useState(false);
-  const [protocolFunctionsError, setProtocolFunctionsError] = useState(null);
   const [protocolFunctionsSelection, setProtocolFunctionsSelection] = useState('');
+  const {
+    data: protocolFunctions,
+    error: protocolFunctionsError,
+    loading: protocolFunctionsLoading,
+  } = useAsyncResource(() => api.contractsProtocolFunctions(network), [network], {
+    // Nothing expanded by default — this is a click-to-expand list, not a
+    // dropdown that always shows one selection.
+    onReset: () => setProtocolFunctionsSelection(''),
+  });
 
   const protocolFunctionsOptions = useMemo(
     () => Object.keys(protocolFunctions?.protocols || {}).sort(),
@@ -115,123 +136,20 @@ export default function SmartContracts({ network }) {
     return (breakdown?.byInvokedFunction || []).map((r) => ({ ...r, ...contractFunctionInfo(r.name) }));
   }, [breakdown]);
 
-  useEffect(() => {
-    let cancelled = false;
-    setBreakdownLoading(true);
-    setBreakdownError(null);
-    // Without this, a failed refetch leaves the previous range/network's
-    // asset-movement table, movement-type table, and swaps list on screen —
-    // those are only gated on !breakdownLoading, not !breakdownError, so a
-    // stale table and the new error would render together.
-    setBreakdown(null);
-    api
-      .opsBreakdown(network, breakdownRange.start, breakdownRange.end)
-      .then((d) => !cancelled && setBreakdown(d))
-      .catch((e) => !cancelled && setBreakdownError(e.message))
-      .finally(() => !cancelled && setBreakdownLoading(false));
-    return () => {
-      cancelled = true;
-    };
-  }, [network, breakdownRange.start, breakdownRange.end]);
-
-  useEffect(() => {
-    let cancelled = false;
-    setAllTimeLoading(true);
-    setAllTimeError(null);
-    setAllTime(null);
-    api
-      .contractsAllTime(network)
-      .then((d) => !cancelled && setAllTime(d))
-      .catch((e) => !cancelled && setAllTimeError(e.message))
-      .finally(() => !cancelled && setAllTimeLoading(false));
-    return () => {
-      cancelled = true;
-    };
-  }, [network]);
-
-  useEffect(() => {
-    let cancelled = false;
-    setProtocolTrendLoading(true);
-    setProtocolTrendError(null);
-    setProtocolTrend(null);
-    api
-      .contractsProtocolTrend(network)
-      .then((d) => {
-        if (cancelled) return;
-        setProtocolTrend(d);
-        setFunctionTrendSelection(d.available && d.functionTotals?.length > 0 ? d.functionTotals[0].name : '');
-      })
-      .catch((e) => !cancelled && setProtocolTrendError(e.message))
-      .finally(() => !cancelled && setProtocolTrendLoading(false));
-    return () => {
-      cancelled = true;
-    };
-  }, [network]);
-
-  useEffect(() => {
-    let cancelled = false;
-    setNetworkTradesLoading(true);
-    setNetworkTradesError(null);
-    setNetworkTrades(null);
-    api
-      .contractsNetworkTradingActivity(network)
-      .then((d) => {
-        if (cancelled) return;
-        setNetworkTrades(d);
-        setNetworkTradeSelection(d.available && d.functionTotals?.length > 0 ? d.functionTotals[0].name : '');
-      })
-      .catch((e) => !cancelled && setNetworkTradesError(e.message))
-      .finally(() => !cancelled && setNetworkTradesLoading(false));
-    return () => {
-      cancelled = true;
-    };
-  }, [network]);
-
-  useEffect(() => {
-    let cancelled = false;
-    setProtocolFunctionsLoading(true);
-    setProtocolFunctionsError(null);
-    setProtocolFunctions(null);
-    api
-      .contractsProtocolFunctions(network)
-      .then((d) => {
-        if (cancelled) return;
-        setProtocolFunctions(d);
-        // Nothing expanded by default — this is now a click-to-expand list,
-        // not a dropdown that always shows one selection.
-        setProtocolFunctionsSelection('');
-      })
-      .catch((e) => !cancelled && setProtocolFunctionsError(e.message))
-      .finally(() => !cancelled && setProtocolFunctionsLoading(false));
-    return () => {
-      cancelled = true;
-    };
-  }, [network]);
-
-  useEffect(() => {
-    if (!/^C[A-Z2-7]{55}$/.test(contractId)) {
-      // Not just "don't fetch" — an edit that moves the input away from a
-      // previously-valid id (fixing a typo, clearing the box) must also drop
-      // whatever the last valid lookup rendered, or it stays on screen
-      // silently mislabeled against the now-different input.
-      setData(null);
-      setError(null);
-      setLoading(false);
-      return;
-    }
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-    setData(null);
-    api
-      .contractActivity(network, contractId, range.start, range.end)
-      .then((d) => !cancelled && setData(d))
-      .catch((e) => !cancelled && setError(e.message))
-      .finally(() => !cancelled && setLoading(false));
-    return () => {
-      cancelled = true;
-    };
-  }, [network, contractId, range.start, range.end]);
+  // Contract-scoped lookup — only fires once contractId is a well-formed
+  // strkey; enabled: false otherwise still lets the hook's own dep-change
+  // reset run (clearing a previously-valid lookup's stale result the moment
+  // the input moves away from it, e.g. fixing a typo), it just skips the
+  // auto-fetch.
+  const {
+    data,
+    error,
+    loading,
+  } = useAsyncResource(
+    () => api.contractActivity(network, contractId, range.start, range.end),
+    [network, contractId, range.start, range.end],
+    { enabled: CONTRACT_ID_RE.test(contractId) }
+  );
 
   return (
     <div className="view">
