@@ -90,6 +90,10 @@ table{ width:100%; border-collapse:collapse; margin-top:8px; }
 .asset-detail{ display:flex; flex-direction:column; gap:10px; }
 .asset-detail-grid{ display:grid; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr)); gap:12px 20px; }
 .asset-detail-grid .subhead-label{ margin:0; display:block; }
+
+tr.row-clickable{ cursor:pointer; }
+tr.row-clickable:hover{ background:var(--bg-panel-raised); }
+.expand-indicator{ margin-left:8px; color:var(--text-faint); font-size:11px; }
 .rating-row{ display:flex; gap:6px; flex-wrap:wrap; }
 
 .badge-btn{ cursor:pointer; }

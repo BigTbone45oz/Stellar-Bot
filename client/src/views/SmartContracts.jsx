@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import DateRangePicker from '../components/DateRangePicker.jsx';
 import ChartPanel from '../components/ChartPanel.jsx';
@@ -92,7 +92,6 @@ export default function SmartContracts({ network }) {
     () => Object.keys(protocolFunctions?.protocols || {}).sort(),
     [protocolFunctions]
   );
-  const selectedProtocolFunctions = protocolFunctions?.protocols?.[protocolFunctionsSelection] || null;
 
   const sorobanRows = useMemo(() => {
     if (!breakdown) return [];
@@ -189,8 +188,9 @@ export default function SmartContracts({ network }) {
       .then((d) => {
         if (cancelled) return;
         setProtocolFunctions(d);
-        const names = d.available ? Object.keys(d.protocols || {}).sort() : [];
-        setProtocolFunctionsSelection(names.length > 0 ? names[0] : '');
+        // Nothing expanded by default — this is now a click-to-expand list,
+        // not a dropdown that always shows one selection.
+        setProtocolFunctionsSelection('');
       })
       .catch((e) => !cancelled && setProtocolFunctionsError(e.message))
       .finally(() => !cancelled && setProtocolFunctionsLoading(false));
@@ -365,51 +365,62 @@ export default function SmartContracts({ network }) {
         <div className="chart-state">{protocolFunctions.reason}</div>
       )}
       {!protocolFunctionsLoading && protocolFunctions?.available && protocolFunctionsOptions.length > 0 && (
-        <>
-          <div className="search-row">
-            <select
-              className="window-select"
-              value={protocolFunctionsSelection}
-              onChange={(e) => setProtocolFunctionsSelection(e.target.value)}
-            >
-              {protocolFunctionsOptions.map((name) => (
-                <option key={name} value={name}>
-                  {name}
-                </option>
-              ))}
-            </select>
-          </div>
-          {selectedProtocolFunctions && (
-            <>
-              <div className="stat-row">
-                <StatCard
-                  label={`${protocolFunctionsSelection} — total calls, all time`}
-                  value={selectedProtocolFunctions.totalCalls.toLocaleString()}
-                />
-              </div>
-              <div className="table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>#</th>
-                      <th>Function</th>
-                      <th>Calls, all time</th>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Protocol</th>
+                <th>Total calls, all time</th>
+              </tr>
+            </thead>
+            <tbody>
+              {protocolFunctionsOptions.map((name) => {
+                const isExpanded = protocolFunctionsSelection === name;
+                const fn = protocolFunctions.protocols[name];
+                return (
+                  <Fragment key={name}>
+                    <tr
+                      className="row-clickable"
+                      onClick={() => setProtocolFunctionsSelection(isExpanded ? '' : name)}
+                    >
+                      <td>
+                        {name}
+                        <span className="expand-indicator">{isExpanded ? '▾' : '▸'}</span>
+                      </td>
+                      <td>{fn.totalCalls.toLocaleString()}</td>
                     </tr>
-                  </thead>
-                  <tbody>
-                    {selectedProtocolFunctions.functionTotals.map((f, i) => (
-                      <tr key={f.name}>
-                        <td>{i + 1}</td>
-                        <td>{f.name}</td>
-                        <td>{f.callCount.toLocaleString()}</td>
+                    {isExpanded && (
+                      <tr className="asset-detail-row">
+                        <td colSpan={2}>
+                          <div className="asset-detail">
+                            <table>
+                              <thead>
+                                <tr>
+                                  <th>#</th>
+                                  <th>Function</th>
+                                  <th>Calls, all time</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {fn.functionTotals.map((f, i) => (
+                                  <tr key={f.name}>
+                                    <td>{i + 1}</td>
+                                    <td>{f.name}</td>
+                                    <td>{f.callCount.toLocaleString()}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </td>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </>
-          )}
-        </>
+                    )}
+                  </Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       )}
 
       <h3 className="section-title">Soroswap usage over time</h3>

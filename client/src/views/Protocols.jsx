@@ -1,9 +1,26 @@
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import StatCard from '../components/StatCard.jsx';
 import ChartPanel from '../components/ChartPanel.jsx';
 
 const TOTAL_OPTION = 'Total (all protocols)';
+
+// DeFiLlama's ranking table names Blend's 4 products separately (Pools,
+// Pools V2, Backstop, Backstop V2), but the Dune-backed function-call
+// breakdown (contracts.js's /protocol-functions) aggregates ALL of Blend's
+// Soroban contracts into one bucket — it can't be split by product the way
+// DeFiLlama's TVL rows are. All 4 Blend rows below intentionally map to the
+// same aggregate key; the expanded view says so explicitly rather than
+// implying each row has its own distinct breakdown.
+const PROTOCOL_FUNCTIONS_ALIAS = {
+  Soroswap: 'Soroswap',
+  'Sushi Stellar': 'Sushi',
+  'Phoenix DeFi Hub': 'Phoenix',
+  'Blend Pools V2': 'Blend',
+  'Blend Pools': 'Blend',
+  'Blend Backstop': 'Blend',
+  'Blend Backstop V2': 'Blend',
+};
 
 function formatUsd(n) {
   if (n === null || n === undefined) return '—';
@@ -21,6 +38,15 @@ export default function Protocols({ network }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [trendSelection, setTrendSelection] = useState(TOTAL_OPTION);
+
+  // Real function-call breakdown per protocol (server/src/routes/contracts.js's
+  // /protocol-functions, Dune-backed) — fetched once alongside the ranking,
+  // not per-row, since it's the same small payload regardless of which row
+  // gets expanded.
+  const [protocolFunctions, setProtocolFunctions] = useState(null);
+  const [protocolFunctionsLoading, setProtocolFunctionsLoading] = useState(false);
+  const [protocolFunctionsError, setProtocolFunctionsError] = useState(null);
+  const [expandedProtocol, setExpandedProtocol] = useState(null);
 
   // Protocols actually worth offering in the selector — only those DeFiLlama
   // reports daily volume for (TVL-only protocols like lending have no trend data
@@ -41,11 +67,26 @@ export default function Protocols({ network }) {
     setLoading(true);
     setError(null);
     setTrendSelection(TOTAL_OPTION);
+    setExpandedProtocol(null);
     api
       .protocolsRanking(network)
       .then((d) => !cancelled && setData(d))
       .catch((e) => !cancelled && setError(e.message))
       .finally(() => !cancelled && setLoading(false));
+    return () => {
+      cancelled = true;
+    };
+  }, [network]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setProtocolFunctionsLoading(true);
+    setProtocolFunctionsError(null);
+    api
+      .contractsProtocolFunctions(network)
+      .then((d) => !cancelled && setProtocolFunctions(d))
+      .catch((e) => !cancelled && setProtocolFunctionsError(e.message))
+      .finally(() => !cancelled && setProtocolFunctionsLoading(false));
     return () => {
       cancelled = true;
     };
@@ -131,20 +172,95 @@ export default function Protocols({ network }) {
                 </tr>
               </thead>
               <tbody>
-                {data.protocols.map((p, i) => (
-                  <tr key={p.name}>
-                    <td>{i + 1}</td>
-                    <td>
-                      {p.logo && <img src={p.logo} alt="" className="protocol-logo" />}
-                      {p.name}
-                    </td>
-                    <td>{p.category || '—'}</td>
-                    <td>{formatUsd(p.volumeAllTimeUsd)}</td>
-                    <td>{formatUsd(p.volume24hUsd)}</td>
-                    <td>{formatPct(p.change1d)}</td>
-                    <td>{formatUsd(p.tvlUsd)}</td>
-                  </tr>
-                ))}
+                {data.protocols.map((p, i) => {
+                  const functionsKey = PROTOCOL_FUNCTIONS_ALIAS[p.name];
+                  const expandable = Boolean(functionsKey);
+                  const isExpanded = expandedProtocol === p.name;
+                  return (
+                    <Fragment key={p.name}>
+                      <tr
+                        className={expandable ? 'row-clickable' : undefined}
+                        onClick={expandable ? () => setExpandedProtocol(isExpanded ? null : p.name) : undefined}
+                      >
+                        <td>{i + 1}</td>
+                        <td>
+                          {p.logo && <img src={p.logo} alt="" className="protocol-logo" />}
+                          {p.name}
+                          {expandable && <span className="expand-indicator">{isExpanded ? '▾' : '▸'}</span>}
+                        </td>
+                        <td>{p.category || '—'}</td>
+                        <td>{formatUsd(p.volumeAllTimeUsd)}</td>
+                        <td>{formatUsd(p.volume24hUsd)}</td>
+                        <td>{formatPct(p.change1d)}</td>
+                        <td>{formatUsd(p.tvlUsd)}</td>
+                      </tr>
+                      {isExpanded && (
+                        <tr className="asset-detail-row">
+                          <td colSpan={7}>
+                            <div className="asset-detail">
+                              {functionsKey === 'Blend' && (
+                                <p className="view-hint">
+                                  Blend's Soroban contracts (all products: Pools, Pools V2, Backstop,
+                                  Backstop V2) are tracked as one aggregate below — Dune can't split
+                                  function calls back out by which specific product they hit.
+                                </p>
+                              )}
+                              {protocolFunctionsLoading && <div className="chart-state">Loading…</div>}
+                              {protocolFunctionsError && (
+                                <div className="chart-state error">{protocolFunctionsError}</div>
+                              )}
+                              {!protocolFunctionsLoading &&
+                                !protocolFunctionsError &&
+                                protocolFunctions &&
+                                !protocolFunctions.available && (
+                                  <div className="chart-state">{protocolFunctions.reason}</div>
+                                )}
+                              {!protocolFunctionsLoading &&
+                                protocolFunctions?.available &&
+                                (() => {
+                                  const fn = protocolFunctions.protocols[functionsKey];
+                                  if (!fn) {
+                                    return (
+                                      <div className="chart-state">
+                                        No function-call data available for {p.name} yet.
+                                      </div>
+                                    );
+                                  }
+                                  return (
+                                    <>
+                                      <p className="view-hint">
+                                        {fn.totalCalls.toLocaleString()} real function calls, all time —
+                                        not filtered by trade detection, so this covers every real use
+                                        (lending actions, liquidity management, etc.), not just swaps.
+                                      </p>
+                                      <table>
+                                        <thead>
+                                          <tr>
+                                            <th>#</th>
+                                            <th>Function</th>
+                                            <th>Calls, all time</th>
+                                          </tr>
+                                        </thead>
+                                        <tbody>
+                                          {fn.functionTotals.map((f, idx) => (
+                                            <tr key={f.name}>
+                                              <td>{idx + 1}</td>
+                                              <td>{f.name}</td>
+                                              <td>{f.callCount.toLocaleString()}</td>
+                                            </tr>
+                                          ))}
+                                        </tbody>
+                                      </table>
+                                    </>
+                                  );
+                                })()}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  );
+                })}
               </tbody>
             </table>
           </div>
