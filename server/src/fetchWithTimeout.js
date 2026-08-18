@@ -1,15 +1,11 @@
 import { httpError } from './httpError.js';
 
 /**
- * Shared "fetch with an AbortController timeout" helper for the third-party
- * APIs this app calls directly (StellarExpert, DeFiLlama, stellar.toml) —
- * horizonClient.js/sorobanClient.js already centralize this for their own
- * upstreams, but the direct-fetch call sites (ledgerTime.js, assetPricing.js,
- * routes/assets.js, routes/protocols.js) each reimplemented the same
- * AbortController/setTimeout/try-finally boilerplate independently. Two
- * variants because call sites split cleanly into two failure-handling styles:
- * best-effort lookups that degrade to null, and routes that need a real
- * upstream-error response.
+ * Shared "fetch with an AbortController timeout" helper for third-party APIs
+ * this app calls directly (StellarExpert, DeFiLlama, stellar.toml) —
+ * horizonClient.js/sorobanClient.js have their own equivalent for their
+ * upstreams. Two variants: best-effort lookups that degrade to null, and
+ * routes that need a real upstream-error response.
  */
 
 /** Best-effort GET: returns parsed JSON, or null on any failure (timeout, network error, non-2xx, bad JSON). */

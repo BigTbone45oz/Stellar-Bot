@@ -27,19 +27,17 @@ const CONFIDENCE_BADGE = {
   unknown: { label: 'custom / unverified', className: 'badge badge-unknown' },
 };
 
-// The two Soroban-specific operation types (outside invoke_host_function itself,
-// which gets split further below by its own `function` field).
+// Soroban-specific operation types, other than invoke_host_function itself
+// (which gets split further below by its own `function` field).
 const SOROBAN_OP_TYPES = ['extend_footprint_ttl', 'restore_footprint'];
 
 export default function SmartContracts({ network }) {
   const [contractId, setContractId] = useState('');
   const [range, setRange] = useState(defaultRange(72)); // 3 days
 
-  // Network-wide totals of "what kind of smart contract operation happened" —
-  // reuses the same /api/payments/breakdown route and Horizon fetch the Payments &
-  // Operations tab already does (no separate contract-scoped fetch needed), just
-  // filtered down to the Soroban-relevant rows and with invoke_host_function split
-  // into its three underlying actions (call / deploy / upload wasm).
+  // Reuses the same /api/payments/breakdown route the Payments & Operations tab
+  // uses, filtered to Soroban-relevant rows with invoke_host_function split into
+  // its three underlying actions (call / deploy / upload wasm).
   const [breakdownRange, setBreakdownRange] = useState(defaultRange(24));
   const {
     data: breakdown,
@@ -50,25 +48,24 @@ export default function SmartContracts({ network }) {
     [network, breakdownRange.start, breakdownRange.end]
   );
 
-  // Since Soroban's mainnet launch, not scoped to any date range — backed by Dune
-  // (see server/src/routes/contracts.js's /all-time), since scanning that much
-  // Horizon history live isn't feasible.
+  // All-time since Soroban's mainnet launch, not scoped to the date range — Dune-backed
+  // since scanning that much Horizon history live isn't feasible.
   const {
     data: allTime,
     error: allTimeError,
     loading: allTimeLoading,
   } = useAsyncResource(() => api.contractsAllTime(network), [network]);
 
-  // Day-bucketed call-volume trend for Soroswap specifically (the one protocol
-  // with confirmed-Soroban contract addresses) — see contracts.js's /protocol-trend.
+  // Day-bucketed call-volume trend for Soroswap specifically (the one protocol with
+  // confirmed-Soroban contract addresses).
   const [functionTrendSelection, setFunctionTrendSelection] = useState('');
   const {
     data: protocolTrend,
     error: protocolTrendError,
     loading: protocolTrendLoading,
   } = useAsyncResource(() => api.contractsProtocolTrend(network), [network], {
-    // Options come from functionTotals (already sorted by call count), so the
-    // default selection is naturally the most-called function, not an arbitrary one.
+    // functionTotals is already sorted by call count, so this defaults to the
+    // most-called function.
     onSuccess: (d) => setFunctionTrendSelection(d.available && d.functionTotals?.length > 0 ? d.functionTotals[0].name : ''),
   });
 
@@ -77,8 +74,8 @@ export default function SmartContracts({ network }) {
     [protocolTrend]
   );
 
-  // Network-wide (every Soroban contract, not just Soroswap) breakdown of real
-  // detected trades by function name — see contracts.js's /network-trading-activity.
+  // Network-wide (every Soroban contract, not just Soroswap) breakdown of detected
+  // trades by function name.
   const [networkTradeSelection, setNetworkTradeSelection] = useState('');
   const {
     data: networkTrades,
@@ -93,19 +90,15 @@ export default function SmartContracts({ network }) {
     [networkTrades]
   );
 
-  // Real per-protocol function-call breakdown, beyond just Soroswap — see
-  // contracts.js's /protocol-functions. Not filtered by the swap-detection
-  // signal used elsewhere (network-wide trades, payments.js) since several of
-  // these protocols aren't DEXs (Blend is a lending market — a real call there
-  // moves one asset, not two, and would be invisible to that filter).
+  // Per-protocol function-call breakdown, beyond just Soroswap. Not filtered by the
+  // swap-detection signal used elsewhere since several of these protocols aren't
+  // DEXs (Blend is a lending market — a real call there moves one asset, not two).
   const [protocolFunctionsSelection, setProtocolFunctionsSelection] = useState('');
   const {
     data: protocolFunctions,
     error: protocolFunctionsError,
     loading: protocolFunctionsLoading,
   } = useAsyncResource(() => api.contractsProtocolFunctions(network), [network], {
-    // Nothing expanded by default — this is a click-to-expand list, not a
-    // dropdown that always shows one selection.
     onReset: () => setProtocolFunctionsSelection(''),
   });
 
@@ -128,19 +121,15 @@ export default function SmartContracts({ network }) {
     return rows.sort((a, b) => b.count - a.count);
   }, [breakdown]);
 
-  // The actual answer to "what are people trying to do with these contracts" —
-  // the specific function invoked (transfer, swap, harvest, ...), not just the
-  // fact that *a* contract was called. Confidence varies per name; see
-  // contractFunctions.js.
+  // The specific function invoked (transfer, swap, harvest, ...), not just that
+  // *a* contract was called. Confidence varies per name; see contractFunctions.js.
   const invokedFunctionRows = useMemo(() => {
     return (breakdown?.byInvokedFunction || []).map((r) => ({ ...r, ...contractFunctionInfo(r.name) }));
   }, [breakdown]);
 
-  // Contract-scoped lookup — only fires once contractId is a well-formed
-  // strkey; enabled: false otherwise still lets the hook's own dep-change
-  // reset run (clearing a previously-valid lookup's stale result the moment
-  // the input moves away from it, e.g. fixing a typo), it just skips the
-  // auto-fetch.
+  // Only fires once contractId is a well-formed strkey; enabled: false still lets
+  // the hook's dep-change reset clear a stale result while typing, it just skips
+  // the auto-fetch.
   const {
     data,
     error,

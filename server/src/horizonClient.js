@@ -25,10 +25,9 @@ export function makeHorizonClient(baseUrl, timeoutMs = 10_000) {
       try {
         return await res.json();
       } catch {
-        // A 2xx response with a non-JSON body (e.g. an intermediary proxy/CDN
-        // returning an HTML error or challenge page under a 200) would otherwise
-        // surface as a raw, cryptic SyntaxError instead of a clean upstream-error
-        // response — same guard sorobanClient.js already has for this failure mode.
+        // A 2xx response with a non-JSON body (e.g. a proxy/CDN error or
+        // challenge page under a 200) would otherwise surface as a raw
+        // SyntaxError instead of a clean upstream-error response.
         throw httpError(502, `Horizon returned a non-JSON response for ${url.pathname}`);
       }
     } catch (err) {

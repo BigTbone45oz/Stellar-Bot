@@ -8,30 +8,26 @@ const PAGE_LIMIT = 200; // Horizon's hard max per page
  * ledger-sequence range, using parallel chunked requests instead of one long
  * sequential cursor-walk.
  *
- * Why this is safe to parallelize when normal pagination isn't: Horizon
- * pagination usually requires each page's cursor to come from the previous
- * page's last record, forcing sequential requests. But the callers here
- * already know the full [startSeq, endSeq] range up front (from
- * ledgerSequenceForTimestamp), so a starting cursor for any sub-range can be
- * computed independently with cursorBeforeLedger() — chunks don't depend on
- * each other and can be fetched concurrently.
+ * Safe to parallelize because the caller already knows the full
+ * [startSeq, endSeq] range up front (from ledgerSequenceForTimestamp), so a
+ * starting cursor for any sub-range can be computed independently via
+ * cursorBeforeLedger() — chunks don't depend on each other. Normal Horizon
+ * pagination can't do this since each page's cursor comes from the previous
+ * page's last record.
  *
- * Each chunk still pages sequentially *within itself* if it has more than one
- * page of records — this matters for /operations, where record density per
- * ledger varies a lot, so a chunk defined by a fixed ledger-sequence span
- * won't always be exactly one page. Correctness doesn't depend on the chunk
- * size guess being right, only on exhaustively paging within each chunk;
- * `ledgersPerChunk` is a performance tuning knob, not a correctness one.
+ * Each chunk still pages sequentially *within itself* since record density
+ * per ledger varies (notably for /operations), so a fixed ledger-sequence
+ * span isn't always exactly one page. `ledgersPerChunk` only tunes
+ * performance — correctness just needs exhaustive paging within each chunk.
  *
  * @param onPage called with each page's in-range records as they arrive, so
  *   the caller can aggregate incrementally instead of holding everything in
  *   memory at once.
- * @returns {truncated, recordCount} — note recordCount can overshoot maxRecords
- *   by up to roughly (concurrency × page size): in-flight chunks aren't
+ * @returns {truncated, recordCount} — recordCount can overshoot maxRecords by
+ *   up to roughly (concurrency × page size): in-flight chunks aren't
  *   interrupted mid-fetch when the cap is crossed, only new chunks stop being
- *   claimed. That's fine for a safety valve against runaway ranges — it isn't
- *   meant to be an exact ceiling, just a bound on how bad "too wide a range"
- *   can get.
+ *   claimed. Fine as a safety valve against runaway ranges, not an exact
+ *   ceiling.
  */
 export async function fetchRangeParallel(
   horizon,
@@ -80,17 +76,15 @@ export async function fetchRangeParallel(
 
   // Bounded-concurrency worker pool: each worker pulls the next unclaimed
   // chunk until none remain, capping in-flight Horizon requests rather than
-  // firing all chunks at once (which could trip Horizon's own rate limiting
-  // on a wide date range).
+  // firing all chunks at once (which could trip Horizon's rate limiting on a
+  // wide date range).
   //
-  // Correctness note: workers claim chunks via a shared, strictly-ascending
-  // `nextChunk` counter, and a claimed chunk always runs to completion (never
-  // abandoned mid-fetch). So even though chunks execute concurrently and can
-  // finish in any order, the set of chunks actually processed when maxRecords
-  // is hit is always a contiguous prefix {0, 1, ..., K} in sequence order —
-  // not a scattered subset. That matters because the UI's truncation message
-  // ("showing the first portion fetched") depends on it being a clean prefix
-  // of the date range, not gaps in the middle.
+  // Chunks are claimed via a shared, strictly-ascending `nextChunk` counter
+  // and always run to completion once claimed, so even though they execute
+  // concurrently and can finish in any order, the chunks processed by the
+  // time maxRecords is hit are always a contiguous prefix in sequence order —
+  // required for the UI's "showing the first portion fetched" truncation
+  // message to be accurate.
   let nextChunk = 0;
   async function worker() {
     while (nextChunk < chunkBounds.length) {
@@ -102,13 +96,11 @@ export async function fetchRangeParallel(
   const workerCount = Math.min(concurrency, chunkBounds.length) || 1;
   await Promise.all(Array.from({ length: workerCount }, worker));
 
-  // Belt-and-suspenders on top of fetchChunk's own truncated=true (which only
-  // fires if a chunk needs 2+ pages to cross maxRecords): if a chunk crosses the
-  // cap on a single short page, it returns immediately without ever hitting that
-  // check again, and any remaining unclaimed chunks in chunkBounds silently never
-  // get fetched. Detecting that directly here — some chunks left unclaimed means
-  // the range wasn't actually fully covered, regardless of which code path caused
-  // it to stop.
+  // fetchChunk's own truncated=true only fires if a chunk needs 2+ pages to
+  // cross maxRecords — a chunk that crosses the cap on a single short page
+  // returns without hitting that check, leaving later chunks unclaimed. Any
+  // unclaimed chunk means the range wasn't fully covered, regardless of which
+  // path caused the stop.
   if (nextChunk < chunkBounds.length) truncated = true;
 
   return { truncated, recordCount };

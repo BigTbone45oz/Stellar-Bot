@@ -12,12 +12,11 @@ const ISSUER_RE = /^G[A-Z2-7]{55}$/;
 const ASSET_ID_RE = new RegExp(`^(.+)-(${ISSUER_RE.source.slice(1, -1)})-\\d+$`);
 const VALID_RESOLUTIONS_MS = [60_000, 300_000, 900_000, 3_600_000, 86_400_000, 604_800_000];
 
-// Horizon has no "top assets" ranking of any kind (no sort param on /assets at all —
-// see the /search route above, which just filters by code). StellarExpert's asset
-// list, sorted by their composite `rating`, is the only source of this ranking; unlike
-// ledgerTime.js's use of StellarExpert, there's no Horizon-based fallback possible here
-// if it's unreachable, since the underlying capability doesn't exist upstream.
-const TOP_ASSETS_PAGE_SIZE = 50; // StellarExpert silently clamps `limit` to 50, verified empirically
+// Horizon has no "top assets" ranking (no sort param on /assets at all).
+// StellarExpert's asset list, sorted by its composite `rating`, is the only
+// source for this — unlike ledgerTime.js's use of StellarExpert, there's no
+// Horizon fallback possible here since the capability doesn't exist upstream.
+const TOP_ASSETS_PAGE_SIZE = 50; // StellarExpert silently clamps `limit` to 50
 
 function parseAssetId(assetId) {
   if (assetId === 'XLM') return { code: 'XLM', issuer: null, native: true };
@@ -36,8 +35,8 @@ async function fetchStellarExpertAssetPage(expertNetwork, cursor) {
 //   code = "USDC"
 //   issuer = "G..."
 //   name = "USD Coin"
-// A regex parse (rather than a full TOML parser dependency) is good enough here —
-// we only need one string value out of one matching block, not general TOML fidelity.
+// A regex parse (not a full TOML parser) is fine — only one string value out
+// of one matching block is needed, not general TOML fidelity.
 const CURRENCY_BLOCK_RE = /\[\[CURRENCIES\]\]([\s\S]*?)(?=\[\[CURRENCIES\]\]|\n\[|$)/g;
 
 async function fetchTomlAssetName(domain, code, issuer) {
@@ -53,14 +52,12 @@ async function fetchTomlAssetName(domain, code, issuer) {
   return null;
 }
 
-// XLM can't be paired against itself, so Horizon's order_book/trade_aggregations
-// (both need two distinct assets) don't work for native the same way they do for
-// every other asset in this table. Rather than leave XLM's row permanently blank,
-// its liquidity/volume are computed against this single reference pair instead —
-// Circle's canonical USDC issuer, the deepest/most liquid market XLM trades in.
-// Known limitation: this captures XLM/USDC activity only, not XLM's combined
-// liquidity/volume across every pair it trades in — same class of "partial, not
-// exhaustive" caveat as everything else derived from a single order book/pair.
+// XLM can't be paired against itself, so order_book/trade_aggregations (which
+// need two distinct assets) don't work for native the way they do for every
+// other asset here. Its liquidity/volume are computed against this single
+// reference pair instead — Circle's canonical USDC issuer, XLM's deepest
+// market. Known limitation: captures XLM/USDC activity only, not XLM's
+// combined liquidity/volume across every pair it trades in.
 const NATIVE_REFERENCE_ASSET = { code: 'USDC', issuer: 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN' };
 
 // `asset` is null for native (XLM), or {code, issuer} for a credit asset.
@@ -73,16 +70,13 @@ function assetParams(prefix, asset) {
   };
 }
 
-// Sum of outstanding DEX order-book depth (bids + asks) for a sellingAsset/buyingAsset
-// pair, denominated in sellingAsset units — the closest real analogue Stellar has to
-// "open interest" for a spot-only DEX (no futures/options market exists on-chain to
-// have literal open interest). Every non-native asset call sells itself for native
-// (so depth comes back in that asset's own units, matching how every other per-asset
-// number in this route is denominated); the native row inverts this — see
-// NATIVE_REFERENCE_ASSET — selling native for the reference asset, so depth comes
-// back in native/XLM units instead. Known limitation: order-book offers only, not
-// AMM liquidity-pool reserves for the same asset — a fuller number, deferred as
-// extra scope for now.
+// Sum of outstanding DEX order-book depth (bids + asks) for a sellingAsset/
+// buyingAsset pair, denominated in sellingAsset units — the closest analogue
+// Stellar has to "open interest" for a spot-only DEX. Every non-native asset
+// sells itself for native, so depth comes back in its own units; the native
+// row inverts this (see NATIVE_REFERENCE_ASSET), selling native for the
+// reference asset so depth comes back in native/XLM units too. Order-book
+// offers only, not AMM liquidity-pool reserves.
 async function fetchOrderBookDepth(horizon, sellingAsset, buyingAsset) {
   const page = await horizon.get('/order_book', {
     ...assetParams('selling', sellingAsset),
@@ -93,39 +87,32 @@ async function fetchOrderBookDepth(horizon, sellingAsset, buyingAsset) {
   return sum(page.bids) + sum(page.asks);
 }
 
-// Deliberately NOT using StellarExpert's `volume7d` for any of this, even for the
-// '7d' option — spot-checked against Horizon directly (USDC, Aug 2026) and found
-// StellarExpert's number ~50x larger than what trade_aggregations reports for the
-// same 7-day window, i.e. they're scoping "volume" differently (likely including
-// payments/off-DEX activity, not just SDEX+AMM trades). Blending that with a
-// Horizon-computed 1h/1d/30d in the same dropdown would make the numbers incomparable
-// across window choices. All windows go through this same Horizon path so they're at
-// least internally consistent with each other.
+// Deliberately NOT using StellarExpert's `volume7d` here, even for the '7d'
+// option — it reads ~50x larger than trade_aggregations for the same window
+// (likely including payments/off-DEX activity, not just SDEX+AMM trades).
+// Blending it with a Horizon-computed 1h/1d/30d would make the numbers
+// incomparable across window choices, so all windows go through Horizon.
 const WINDOW_MS = { '1h': 3_600_000, '1d': 86_400_000, '7d': 7 * 86_400_000, '30d': 30 * 86_400_000 };
-// Resolution must be strictly SMALLER than the window, not equal to it — Horizon's
-// buckets are clock-aligned (to the hour/day), not rolling, so a "last 1 hour"
-// query with 1h-sized buckets almost always lands entirely inside the still-forming
-// current hour (zero completed buckets) or straddles a boundary Horizon won't
-// partially return. Verified live against real trade data (USDC, Aug 2026): a 1h
-// window with a 1h bucket returned $0 despite ~$155K of real volume in the
-// immediately preceding hour; the same window with 5-minute buckets correctly
-// summed to ~$21K. Using a finer resolution means only the sliver at the very
-// edges of the window can be missed (a partial bucket at each end), not the whole
-// window — real, small loss instead of a false zero.
+// Resolution must be strictly smaller than the window, not equal — Horizon's
+// buckets are clock-aligned (to the hour/day), not rolling, so a "last 1
+// hour" query with a 1h bucket almost always lands entirely inside the
+// still-forming current hour (zero completed buckets). A finer resolution
+// means only a small sliver at each edge of the window can be missed,
+// instead of the whole window reading as a false zero.
 const RESOLUTION_FOR_WINDOW = { '1h': 300_000, '1d': 3_600_000, '7d': 86_400_000, '30d': 86_400_000 };
 
-// Horizon amount fields (base_volume/counter_volume) are already decimal strings,
-// unlike StellarExpert's raw-stroop `supply`/`volume7d` — no BigInt/1e7 conversion
-// needed here, see the /top supply handling above for the contrast.
+// Horizon amount fields (base_volume/counter_volume) are already decimal
+// strings, unlike StellarExpert's raw-stroop `supply`/`volume7d` — no
+// BigInt/1e7 conversion needed here (contrast with /top's supply handling).
 //
-// Returns volume denominated in counterAsset's units — every non-native call puts
-// the target asset in the counter slot (base=native), so its own volume comes back
-// in its own units; the native row inverts this (base=reference, counter=native) so
-// XLM's volume comes back in native/XLM units too, matching the pattern.
+// Returns volume denominated in counterAsset's units — every non-native call
+// puts the target asset in the counter slot (base=native); the native row
+// inverts this (base=reference, counter=native) so XLM's volume also comes
+// back in native/XLM units.
 async function fetchWindowVolume(horizon, baseAsset, counterAsset, window) {
   const endMs = Date.now();
   const startMs = endMs - WINDOW_MS[window];
-  const resolutionMs = RESOLUTION_FOR_WINDOW[window]; // both values are in VALID_RESOLUTIONS_MS (top of file)
+  const resolutionMs = RESOLUTION_FOR_WINDOW[window]; // must be one of VALID_RESOLUTIONS_MS (top of file)
   const page = await horizon.get('/trade_aggregations', {
     ...assetParams('base', baseAsset),
     ...assetParams('counter', counterAsset),
@@ -165,10 +152,9 @@ router.get('/search', async (req, res, next) => {
   }
 });
 
-// Top 100 assets network-wide, ranked by StellarExpert's composite `rating` (age,
-// activity, trustline count, liquidity, 7-day volume, interop — see their API response;
-// not something this app computes itself). No Horizon equivalent exists — see the note
-// above TOP_ASSETS_PAGE_SIZE.
+// Top 100 assets network-wide, ranked by StellarExpert's composite `rating`
+// (age, activity, trustline count, liquidity, 7-day volume, interop). No
+// Horizon equivalent exists — see the note above TOP_ASSETS_PAGE_SIZE.
 router.get('/top', async (req, res, next) => {
   try {
     const net = resolveNetwork(req.query.network);
@@ -178,10 +164,9 @@ router.get('/top', async (req, res, next) => {
     }
 
     const data = await cached(`topAssets:${net.key}`, TTL.RECENT, async () => {
-      // Two pages of 50 cover the requested top 100. StellarExpert's cursor is a plain
-      // offset (verified: requesting limit=5 returns a `next` link with cursor=5), so
-      // both pages are independently fetchable — no need to wait on page 1's response
-      // to know page 2's cursor.
+      // Two pages of 50 cover the requested top 100. StellarExpert's cursor
+      // is a plain offset, so both pages are independently fetchable without
+      // waiting on page 1's response to know page 2's cursor.
       const [page1, page2] = await Promise.all([
         fetchStellarExpertAssetPage(expertNetwork, 0),
         fetchStellarExpertAssetPage(expertNetwork, TOP_ASSETS_PAGE_SIZE),
@@ -189,26 +174,25 @@ router.get('/top', async (req, res, next) => {
 
       const records = [...(page1._embedded?.records || []), ...(page2._embedded?.records || [])];
 
-      // rank is assigned AFTER filtering out unparseable entries (below), not from
-      // this map's index — assigning it here would leave gaps in the displayed
-      // ranking (1, 2, 4, 5, 7…) any time an entry gets dropped, while the client
-      // still labels the table "Top 100" and renders `rank` as-is with no
-      // renumbering of its own.
+      // rank is assigned AFTER filtering unparseable entries (below), not
+      // from this map's index — otherwise the displayed ranking would have
+      // gaps (1, 2, 4, 5…) whenever an entry gets dropped, while the client
+      // still labels it "Top 100" and renders `rank` as-is.
       return records
         .map((r) => {
           const parsed = parseAssetId(r.asset);
           if (!parsed) return null;
 
-          // `price` is USD, not XLM — verified against known real-world prices (BTC/ETH
-          // records came back ~$63k/~$1.9k, not XLM-denominated figures). Named priceUsd
-          // here so it isn't confused with the XLM-denominated price-history route below.
+          // `price` is USD, not XLM — named priceUsd so it isn't confused
+          // with the XLM-denominated price-history route below.
           const priceUsd = r.price ?? null;
 
-          // Ledger amounts (this `supply`) are fixed-point int64 stroops (7 decimals) —
-          // the same magnitude problem as the TOID values in toid.js: XLM's raw supply
-          // exceeds Number.MAX_SAFE_INTEGER, so Number(r.supply) would silently round the
-          // integer part before it's even divided. BigInt keeps that exact; the whole-unit
-          // result is always small enough to return to a plain JS number safely.
+          // Ledger amounts (`supply`) are fixed-point int64 stroops (7
+          // decimals) — same magnitude problem as TOID values in toid.js:
+          // XLM's raw supply exceeds Number.MAX_SAFE_INTEGER, so
+          // Number(r.supply) would silently round before dividing. BigInt
+          // keeps it exact; the whole-unit result is small enough for a
+          // plain JS number.
           let supply = null;
           if (typeof r.supply === 'string') {
             const stroops = BigInt(r.supply);
@@ -219,17 +203,16 @@ router.get('/top', async (req, res, next) => {
 
           return {
             ...parsed,
-            // tomlInfo.name (SEP-1 stellar.toml) only covers assets whose issuer both sets
-            // a home_domain and publishes a matching CURRENCIES entry — most don't, so this
-            // falls back to the code for most rows. The /details route below fills in a
-            // real name (fetched from the issuer's own toml) lazily, per visible page.
+            // tomlInfo.name (SEP-1 stellar.toml) only covers assets whose
+            // issuer both sets home_domain and publishes a matching
+            // CURRENCIES entry — most don't, so this falls back to the code.
+            // /details fills in a real name lazily, per visible page.
             name: r.tomlInfo?.name || parsed.code,
-            // Confirmed via StellarExpert's single-asset endpoint (which labels the same
-            // three numbers `{total, authorized, funded}`): this list endpoint's compact
-            // `trustlines` array is [total, authorized, funded] in that order. "Holders"
-            // should mean accounts actually holding a balance, i.e. funded (trustlines[2]),
-            // not just anyone who ever opened a trustline (trustlines[0]) — those can differ
-            // by an order of magnitude for assets people claimed and never used.
+            // This list endpoint's compact `trustlines` array is
+            // [total, authorized, funded]. "Holders" means accounts actually
+            // holding a balance (funded, trustlines[2]), not just anyone who
+            // ever opened a trustline (trustlines[0]) — those can differ by
+            // an order of magnitude for assets claimed and never used.
             holders: Array.isArray(r.trustlines) ? r.trustlines[2] : null,
             volume7d: r.volume7d ?? null,
             priceUsd,
@@ -254,16 +237,16 @@ router.get('/top', async (req, res, next) => {
 
 const MAX_DETAILS_BATCH = 20; // headroom over the client's 15-per-page table
 
-// Per-asset detail lazily fetched only for the currently visible page of the top-100
-// table (never all 100 at once) — real display name, live order-book depth, and
-// (optionally) a custom-window trading volume. Each of these needs its own upstream
-// call per asset, unlike everything in /top which comes from one shared StellarExpert
-// list request, so this is deliberately opt-in/bounded rather than folded into /top.
+// Per-asset detail lazily fetched only for the currently visible page of the
+// top-100 table (never all 100 at once) — real display name, live order-book
+// depth, and (optionally) a custom-window trading volume. Each needs its own
+// upstream call per asset, unlike /top's single shared StellarExpert list
+// request, so this is deliberately opt-in/bounded rather than folded in.
 //
-// `assets` query param: comma-separated `CODE:ISSUER:DOMAIN` triples (ISSUER/DOMAIN
-// may be empty — native XLM has neither; see NATIVE_REFERENCE_ASSET above for how
-// its liquidity/volume are computed anyway. Name lookup is skipped for native and
-// for any issuer with no known home domain).
+// `assets` query param: comma-separated `CODE:ISSUER:DOMAIN` triples
+// (ISSUER/DOMAIN may be empty — native XLM has neither; see
+// NATIVE_REFERENCE_ASSET above. Name lookup is skipped for native and for
+// any issuer with no known home domain).
 router.get('/details', async (req, res, next) => {
   try {
     const net = resolveNetwork(req.query.network);
@@ -294,8 +277,8 @@ router.get('/details', async (req, res, next) => {
     }
 
     const results = {};
-    // Bounded-concurrency worker pool, same shape as contracts.js's per-transaction
-    // fetch — independent per-asset work, no reason to serialize it.
+    // Bounded-concurrency worker pool — independent per-asset work, no
+    // reason to serialize it.
     const CONCURRENCY = 6;
     let nextIdx = 0;
     async function worker() {
@@ -355,22 +338,13 @@ router.get('/price-history', async (req, res, next) => {
 
     const cacheKey = `priceHistory:${net.key}:${code}:${issuer}:${start}:${end}:${resolutionMs}`;
     const data = await cached(cacheKey, ttlForRange(endMs), async () => {
-      // trade_aggregations pages at up to 200 buckets/request — previously this
-      // made exactly one call and returned whatever came back, with no signal to
-      // the client if the real range needed more. Reachable in practice: at the
-      // default 1-day resolution, any range over ~200 days (well within
-      // MAX_RANGE_MS's ~366-day cap, and reachable via the manual date inputs on
-      // this view) silently dropped the remainder.
-      //
-      // Unlike Horizon's cursor-based collections, trade_aggregations has real
-      // start/end filtering, so (unlike rangeFetch.js's ledger-cursor chunking)
-      // the full set of chunk windows is knowable up front from
-      // startMs/endMs/resolutionMs — chunks don't depend on each other's
-      // results, so they're fetched with a bounded-concurrency worker pool
-      // instead of one-at-a-time, same total request count but far less
-      // wall-clock time on wide ranges. RECORDS_CAP is a safety valve for
-      // pathological combinations (e.g. 1-minute resolution over a
-      // near-year-long range), not an expected ceiling for normal use.
+      // trade_aggregations pages at up to 200 buckets/request. Unlike
+      // Horizon's cursor-based collections, it supports real start/end
+      // filtering, so the full set of chunk windows is knowable up front from
+      // startMs/endMs/resolutionMs — chunks don't depend on each other and
+      // are fetched with a bounded-concurrency worker pool. RECORDS_CAP is a
+      // safety valve for pathological combinations (e.g. 1-minute resolution
+      // over a near-year-long range), not an expected ceiling.
       const PAGE_LIMIT = 200;
       const RECORDS_CAP = 5000;
       const chunkSpanMs = PAGE_LIMIT * resolutionMs;
@@ -378,13 +352,11 @@ router.get('/price-history', async (req, res, next) => {
       for (let chunkStart = startMs; chunkStart < endMs; chunkStart += chunkSpanMs) {
         chunkBounds.push([chunkStart, Math.min(chunkStart + chunkSpanMs, endMs)]);
       }
-      // Each chunk yields at most PAGE_LIMIT records, so capping the number of
-      // chunks claimed bounds both the returned size AND the actual number of
-      // Horizon requests made — unlike a post-hoc array slice, this stops a
-      // pathological combination (e.g. 1-minute resolution over a near-year
-      // range, ~2,600 chunks) from firing thousands of requests just to throw
-      // most of the results away. Same "cap chunks claimed, mark truncated if
-      // any remain unclaimed" shape as rangeFetch.js's worker pool.
+      // Each chunk yields at most PAGE_LIMIT records, so capping the number
+      // of chunks claimed bounds both the returned size and the actual
+      // number of Horizon requests made, instead of firing them all and
+      // throwing most away via a post-hoc slice. Same "cap chunks claimed,
+      // mark truncated if any remain unclaimed" shape as rangeFetch.js.
       const maxChunks = Math.ceil(RECORDS_CAP / PAGE_LIMIT);
 
       const chunkResults = new Array(chunkBounds.length);

@@ -32,10 +32,8 @@ function accumulateMovement(map, assetKey, code, issuer, amount) {
 // protocol-level struct `InvokeContractArgs { contractAddress, functionName, args }`
 // — Horizon serializes those three fields, in that fixed order, as this op's flat
 // `parameters` array. So parameters[1] is always the invoked function's name (an
-// ScVal Symbol), not a Horizon convention that could shift — it's the XDR struct's
-// field order. Verified live: decoded 198 real mainnet invoke_host_function ops,
-// 0 decode failures, names came back as plausible real function names ("work",
-// "harvest", "transfer").
+// ScVal Symbol) — that's the XDR struct's field order, not a Horizon convention
+// that could shift.
 function decodeInvokedFunctionName(op) {
   if (!Array.isArray(op.parameters) || op.parameters.length < 2) return null;
   const fnParam = op.parameters[1];
@@ -80,12 +78,12 @@ router.get('/breakdown', async (req, res, next) => {
       const byInvokedFunction = new Map();
 
       // Real, verifiable asset movement caused by contract calls — Horizon's own
-      // `asset_balance_changes` on invoke_host_function ops, populated only for calls
-      // that move a classic Stellar asset or a Stellar Asset Contract (SAC)-wrapped
-      // token (confirmed live: 4 of ~2,000 sampled recent mainnet ops had this field
-      // — most Soroban activity is pure custom-token/contract-storage state that
-      // Horizon can't see at this level, so this is a real but partial signal, not a
-      // general "what does this contract do" answer).
+      // `asset_balance_changes` on invoke_host_function ops, populated only for
+      // calls that move a classic Stellar asset or a Stellar Asset Contract
+      // (SAC)-wrapped token. Most Soroban activity is pure custom-token/
+      // contract-storage state Horizon can't see at this level, so this is a
+      // real but partial signal, not a general "what does this contract do"
+      // answer.
       const assetMovement = new Map(); // assetKey -> { code, issuer, total, changeCount }
       const movementByType = new Map(); // 'mint'|'transfer'|'clawback'|'burn' -> count
       const swaps = []; // ops that moved 2+ distinct assets in one call — a provable swap
@@ -101,13 +99,10 @@ router.get('/breakdown', async (req, res, next) => {
       // for why) since it's a "new account exists" signal, not a payment.
       let newAccountFundingXlm = 0;
 
-      // Day-bucketed new-account/trustline-change counts — the Network Growth
-      // tab's trend chart. Horizon has no aggregate endpoint for "op type X per
-      // day" (unlike /ledgers, which gives tx/op *totals* per ledger but not a
-      // per-type breakdown) — the only way to get this is enumerating every
-      // operation, same as the rest of this route already does, so this trend
-      // is bound by the same op-density-based date-range limits as everything
-      // else here (see OPS_BREAKDOWN_RANGE_PRESETS on the client).
+      // Day-bucketed new-account/trustline-change counts for the Network Growth
+      // tab's trend chart. Horizon has no aggregate "op type X per day"
+      // endpoint, so this piggybacks on the same operation enumeration as the
+      // rest of the route, bound by the same date-range limits.
       const dailyGrowth = new Map(); // day (YYYY-MM-DD) -> { day, newAccounts, newTrustlines }
       function bumpDailyGrowth(createdAt, field) {
         const day = createdAt.slice(0, 10);
@@ -149,22 +144,14 @@ router.get('/breakdown', async (req, res, next) => {
                 }
                 if (distinctAssets.size >= 2) {
                   // Not capped here — fetchRangeParallel's chunks resolve
-                  // concurrently, in real-world response-time order rather
-                  // than ledger order (rangeFetch.js's own doc comment says
-                  // as much), so capping mid-collection would make "which 50
-                  // swaps" depend on which of the 6 concurrent Horizon
-                  // workers happened to respond first that particular run —
-                  // not a chronological or otherwise meaningful prefix.
-                  // Collected in full (implicitly bounded by the same
-                  // maxRecords op-scan cap fetchRangeParallel already
-                  // enforces below) and sorted/capped after the loop instead.
+                  // concurrently, in response-time order rather than ledger
+                  // order, so capping mid-collection would make "which 50
+                  // swaps" depend on worker timing, not a meaningful prefix.
+                  // Collected in full and sorted/capped after the loop instead.
                   swaps.push({
                     // A transaction can contain multiple invoke_host_function
-                    // operations, each independently qualifying as a swap here —
-                    // transactionHash alone isn't unique per swap in that case
-                    // (same class of bug already fixed once for the payments list
-                    // by adding the operation's own id; this list needed the same
-                    // treatment, missed because it was added later).
+                    // ops, each independently qualifying as a swap — id (not
+                    // transactionHash) keeps each entry unique.
                     id: op.id,
                     transactionHash: op.transaction_hash,
                     createdAt: op.created_at,
@@ -179,11 +166,10 @@ router.get('/breakdown', async (req, res, next) => {
                 }
               }
             } else if (PAYMENT_OP_TYPES.has(op.type)) {
-              // path_payment_* ops carry the *receive-side* asset directly on
-              // asset_type/asset_code/asset_issuer (Horizon's convention — the
-              // source-side asset, if different, lives under source_asset_type/
-              // source_asset_code/source_asset_issuer, not tracked here; see the
-              // PAYMENT_OP_TYPES comment above for why).
+              // path_payment_* ops carry the *receive-side* asset on
+              // asset_type/asset_code/asset_issuer (Horizon's convention) — the
+              // source-side asset, if different, lives under source_asset_*
+              // and isn't tracked here (see PAYMENT_OP_TYPES above).
               const assetKey = op.asset_type === 'native' ? 'native' : `${op.asset_code}:${op.asset_issuer}`;
               accumulateMovement(
                 paymentMovement,
@@ -194,11 +180,9 @@ router.get('/breakdown', async (req, res, next) => {
               );
               paymentMovementByType.set(op.type, (paymentMovementByType.get(op.type) || 0) + 1);
             } else if (op.type === 'create_account') {
-              // starting_balance is real XLM funding, not just an account-creation
-              // count — but tracked separately from paymentMovement above, not
-              // folded into it: blending it into the same "native" entry would
-              // contaminate that row's changeCount (rendered as "# of payments")
-              // with account-funding events that aren't payments.
+              // starting_balance is real XLM funding, tracked separately from
+              // paymentMovement — folding it in would contaminate that row's
+              // changeCount ("# of payments") with non-payment events.
               newAccountFundingXlm += Number(op.starting_balance);
               bumpDailyGrowth(op.created_at, 'newAccounts');
             } else if (op.type === 'change_trust') {
@@ -208,14 +192,11 @@ router.get('/breakdown', async (req, res, next) => {
         },
       });
 
-      // USD-price each distinct asset touched (usually a handful — actively-traded
-      // assets, not the full 100+ from assets.js's /top). Contract movement and
-      // payment movement can share assets (native XLM commonly appears in both),
-      // and cached() has no in-flight-request dedup (see CLAUDE.md's "Consciously
-      // deferred" note) — pricing the two lists independently would commonly fire
-      // two concurrent, duplicate upstream lookups for the same asset within one
-      // request. Priced once via a deduped union instead, then applied back to
-      // both maps by assetKey.
+      // USD-price each distinct asset touched. Contract movement and payment
+      // movement can share assets (native XLM commonly appears in both), and
+      // cached() has no in-flight-request dedup, so pricing the two lists
+      // independently would fire duplicate upstream lookups. Priced once via
+      // a deduped union instead, then applied back to both maps by assetKey.
       const expertNetwork = STELLAR_EXPERT_NETWORK[net.key];
       const uniqueAssets = new Map(); // assetKey -> { code, issuer }
       for (const [key, entry] of assetMovement) uniqueAssets.set(key, { code: entry.code, issuer: entry.issuer });
@@ -239,16 +220,14 @@ router.get('/breakdown', async (req, res, next) => {
       sortMovementList(movementList);
       sortMovementList(paymentMovementList);
 
-      // Sorted chronologically, then capped — makes "top 50" a real,
-      // deterministic prefix (most recent 50) instead of whichever 50
-      // happened to arrive first across 6 concurrently-resolving chunks.
+      // Sorted chronologically, then capped — makes "top 50" a deterministic
+      // most-recent-50 prefix instead of whichever arrived first.
       swaps.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
       swaps.length = Math.min(swaps.length, 50);
 
       const totalMovedUsd = movementList.reduce((sum, e) => sum + (e.totalUsd || 0), 0);
       const pricedAssetCount = movementList.filter((e) => e.totalUsd !== null).length;
-      // Lower bound, not exact — same caveat as totalMovedUsd above: only the
-      // assets whose USD price actually resolved are summed.
+      // Lower bound, not exact — only assets whose USD price resolved are summed.
       const totalPaymentVolumeUsd = paymentMovementList.reduce((sum, e) => sum + (e.totalUsd || 0), 0);
       const pricedPaymentAssetCount = paymentMovementList.filter((e) => e.totalUsd !== null).length;
 
@@ -265,9 +244,8 @@ router.get('/breakdown', async (req, res, next) => {
           .sort((a, b) => b.count - a.count)
           .slice(0, 50), // long tail cut here, not a "truncated" fetch — just display scope
         assetMovement: movementList,
-        // Total is a lower bound, not exact — it's the sum of only the assets whose
-        // USD price we could actually resolve (see pricedAssetCount vs
-        // assetMovement.length to know if any were skipped).
+        // Lower bound — sum of only the assets whose USD price resolved
+        // (compare pricedAssetCount to assetMovement.length to see if any were skipped).
         totalMovedUsd,
         pricedAssetCount,
         movementByType: Array.from(movementByType.entries())
@@ -276,8 +254,8 @@ router.get('/breakdown', async (req, res, next) => {
         swaps,
 
         // Real payment value (payment/path_payment_* only — create_account's
-        // funding is tracked separately below, not blended in here). Same "lower
-        // bound, not exact" caveat: only assets that priced successfully are summed.
+        // funding is tracked separately below). Lower bound: only assets that
+        // priced successfully are summed.
         paymentMovement: paymentMovementList,
         totalPaymentVolumeUsd,
         pricedPaymentAssetCount,
@@ -285,9 +263,8 @@ router.get('/breakdown', async (req, res, next) => {
           .map(([type, count]) => ({ type, count }))
           .sort((a, b) => b.count - a.count),
 
-        // Network growth — pulled from byType (already tallied above from the
-        // same /operations pass, no extra request) rather than making callers
-        // search that array themselves for these two specific op types.
+        // Pulled from byType (already tallied above) rather than making
+        // callers search that array for these two specific op types.
         newAccountCount: byType.get('create_account') || 0,
         newAccountFundingXlm,
         // NOTE: change_trust covers establishing AND modifying/removing a

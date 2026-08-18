@@ -25,10 +25,8 @@ export default function PaymentsOperations({ network }) {
     [network, range.start, range.end]
   );
 
-  // Horizon's `type` is a snake_case API identifier (e.g. "path_payment_strict_send"),
-  // not a display name — labeled with Stellar's own operation names instead. Keeping
-  // `type` around in each row (rather than overwriting it) in case anything else ever
-  // needs the raw identifier, e.g. a future click-through.
+  // Horizon's `type` is a snake_case API identifier, not a display name — labeled
+  // with Stellar's own operation names instead; `type` itself is kept in each row too.
   const byTypeLabeled = useMemo(
     () => data?.byType.map((r) => ({ ...r, label: operationTypeLabel(r.type) })),
     [data]

@@ -1,7 +1,7 @@
 // Horizon's paging_token for ledgers/transactions/operations/effects is a TOID:
 // a single integer packing (ledgerSeq << 32) | (txIndex << 12) | opIndex.
-// These values exceed Number.MAX_SAFE_INTEGER for real ledgers, so BigInt is required —
-// using Number here would silently lose precision rather than error.
+// These values exceed Number.MAX_SAFE_INTEGER for real ledgers, so BigInt is
+// required — using Number would silently lose precision rather than error.
 
 const LEDGER_SHIFT = 32n;
 

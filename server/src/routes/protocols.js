@@ -5,28 +5,20 @@ import { TREND_DAYS } from '../config.js';
 
 const router = Router();
 
-// DeFiLlama — free, no-auth, no rate limit documented for this usage level.
-// Verified live (not assumed) against the real endpoints before wiring this up:
-//   GET https://api.llama.fi/protocols            -> TVL per protocol, `chains`/`chainTvls`
-//   GET https://api.llama.fi/overview/dexs/{chain} -> trading volume per protocol
-// Neither endpoint has a Horizon/Soroban equivalent — there's no concept of "a
-// protocol" at the ledger level, only raw contract calls (see contracts.js's
-// function-name breakdown for that angle). This is a case where third-party
-// pre-aggregation is doing something structurally impossible to compute from our
-// own upstream sources, not just something cheaper.
+// DeFiLlama — free, no-auth. Neither endpoint has a Horizon/Soroban
+// equivalent: there's no concept of "a protocol" at the ledger level, only
+// raw contract calls (see contracts.js's function-name breakdown for that
+// angle). Third-party pre-aggregation here is doing something structurally
+// impossible to compute from our own upstream sources, not just cheaper.
+//   GET /protocols            -> TVL per protocol, `chains`/`chainTvls`
+//   GET /overview/dexs/{chain} -> trading volume per protocol
 const PROTOCOLS_URL = 'https://api.llama.fi/protocols';
-// totalDataChart intentionally NOT excluded here (unlike a first pass at this route)
-// — it's a real daily volume time series (verified live: 1,598 days back to April
-// 2022), the actual data this project's stated goal needs ("trends... how often
-// used"), and we're already paying for the request either way. Trimmed to a
-// trailing window server-side before it reaches the client (see TREND_DAYS) so we
-// ship a chart-sized payload, not years of daily points on every page load.
-// totalDataChartBreakdown also included now (per-protocol daily volume, same shape
-// as totalDataChart but split out: [ [unixSeconds, { protocolName: usd }], ... ]) —
-// powers the per-protocol line selector on the trend chart.
+// totalDataChart is a daily volume time series: [ [unixSeconds, usd], ... ],
+// trimmed to a trailing window (TREND_DAYS, shared with growth.js's
+// /account-trend) before reaching the client. totalDataChartBreakdown is the
+// same shape split per protocol: [ [unixSeconds, { protocolName: usd }], ... ]
+// — powers the per-protocol line selector on the trend chart.
 const DEX_VOLUME_URL = 'https://api.llama.fi/overview/dexs/stellar';
-// TREND_DAYS itself lives in config.js, shared with growth.js's /account-trend
-// — was independently declared as the same value in both files before.
 
 // CEXs (Binance, Gate, Poloniex, ...) show up in DeFiLlama's Stellar TVL list
 // because they custody Stellar assets off-chain — they're not programs running
@@ -50,25 +42,19 @@ router.get('/ranking', async (req, res, next) => {
     }
 
     const data = await cached('protocolsRanking:pubnet', TTL.HOURLY, async () => {
-      // Promise.allSettled, not Promise.all — these are two independent calls
-      // to the same third party (no SLA), and the merge logic below already
-      // tolerates missing data from either side (every field it reads has an
-      // `|| []`/`|| null` fallback). A transient failure on just the volume
-      // endpoint shouldn't take down a TVL-only ranking that would otherwise
-      // have rendered fine — same "degrade rather than fail" principle this
-      // codebase applies to every other best-effort external call.
+      // Promise.allSettled, not Promise.all — two independent calls to the
+      // same third party (no SLA); the merge logic below tolerates missing
+      // data from either side, so a transient failure on just the volume
+      // endpoint shouldn't take down a TVL-only ranking.
       const [allProtocolsResult, dexOverviewResult] = await Promise.allSettled([
         fetchJson(PROTOCOLS_URL),
         fetchJson(DEX_VOLUME_URL),
       ]);
 
-      // If BOTH failed, this isn't "degrade to partial data" territory anymore
-      // — it's a genuine outage, and letting it fall through to the merge
-      // logic below would produce a fake `{ available: true, protocols: [] }`
-      // that then gets cached and served as gospel ("DeFiLlama has zero
-      // Stellar protocols") to every visitor for a full TTL.HOURLY (1 hour),
-      // long outliving the actual blip. Throwing here means cached() never
-      // stores anything and the route returns a real error instead.
+      // If BOTH failed, this is a genuine outage, not partial data — falling
+      // through would cache a fake `{ available: true, protocols: [] }` and
+      // serve it as gospel for a full TTL.HOURLY. Throwing here means
+      // cached() never stores anything and the route returns a real error.
       if (allProtocolsResult.status === 'rejected' && dexOverviewResult.status === 'rejected') {
         throw allProtocolsResult.reason;
       }
@@ -77,20 +63,16 @@ router.get('/ranking', async (req, res, next) => {
 
       // Joined by name — NOT by DeFiLlama's `parentProtocol` field. That field
       // groups multiple genuinely DIFFERENT products under one shared parent
-      // (e.g. Blend Pools, Blend Pools V2, Blend Backstop, and Blend Backstop
-      // V2 all share `parent#blend` despite being four distinct products) — an
-      // earlier version of this route joined by parentProtocol and silently
-      // collapsed all four into a single row, losing three real, distinct
-      // protocols from the ranking. Name is the right join key for the common
-      // case (verified live: Soroswap, Scopuly, Aquarius Stellar, and the four
-      // Blend products all match cleanly by name across both endpoints).
+      // (e.g. Blend Pools, Pools V2, Backstop, and Backstop V2 all share
+      // `parent#blend` despite being four distinct products), so joining on it
+      // would silently collapse them into one row. Name is the right join key
+      // for the common case.
       //
-      // The one confirmed exception: DeFiLlama lists the same underlying
-      // Allbridge product under "Allbridge Core" in /protocols but
-      // "Allbridge Classic" in /overview/dexs/stellar — a real cross-endpoint
-      // naming inconsistency for one specific protocol, not a general pattern,
-      // so it's handled with an explicit alias rather than a blanket join key
-      // that would risk merging unrelated same-parent products again.
+      // One confirmed exception: DeFiLlama lists the same Allbridge product as
+      // "Allbridge Core" in /protocols but "Allbridge Classic" in
+      // /overview/dexs/stellar — handled with an explicit alias rather than a
+      // blanket join key that would risk merging unrelated same-parent
+      // products again.
       const NAME_ALIASES = { 'Allbridge Classic': 'Allbridge Core' };
       const canonicalName = (name) => NAME_ALIASES[name] || name;
 
@@ -113,11 +95,9 @@ router.get('/ranking', async (req, res, next) => {
 
       // Volume entries can name a protocol /protocols didn't (or vice versa) —
       // merge by (aliased) name rather than assuming the two lists line up.
-      // Re-applying the CEX exclusion here too: this loop used to unconditionally
-      // set into the map, which meant a CEX-category protocol absent from (or
-      // filtered out of) the TVL loop above could still get inserted via its
-      // DEX-volume entry — a real bug that defeated the exclusion for exactly
-      // the rows it existed to catch.
+      // The CEX exclusion is re-applied here too — without it, a CEX-category
+      // protocol excluded from the TVL loop above could sneak back in via its
+      // DEX-volume entry.
       for (const p of dexOverview.protocols || []) {
         if (EXCLUDED_CATEGORIES.has(p.category)) continue;
         const key = canonicalName(p.name);
@@ -148,23 +128,18 @@ router.get('/ranking', async (req, res, next) => {
         return (b.tvlUsd || 0) - (a.tvlUsd || 0);
       });
 
-      // Combined daily DEX volume across every tracked Stellar protocol — the
-      // ecosystem-level "how much trading activity is happening, and is it
-      // growing or shrinking" trend. `totalDataChart` is [ [unixSeconds, usd], ... ],
-      // already daily-bucketed by DeFiLlama; only reformatted and windowed here.
+      // Combined daily DEX volume across every tracked Stellar protocol,
+      // already daily-bucketed by DeFiLlama — only reformatted and windowed here.
       const cutoffSec = Math.floor(Date.now() / 1000) - TREND_DAYS * 86400;
       const volumeTrend = (dexOverview.totalDataChart || [])
         .filter(([ts]) => ts >= cutoffSec)
         .map(([ts, usd]) => ({ day: new Date(ts * 1000).toISOString().slice(0, 10), volumeUsd: usd }));
 
-      // Same daily series, split per protocol instead of summed — only kept for
-      // protocols that survived the CEX filter above, so a selector built from
-      // this can't offer a protocol that isn't in the ranking table.
-      //
-      // totalDataChartBreakdown keys its entries by dexOverview's own raw names
-      // (e.g. "Allbridge Classic"), which the alias map above renames to match
-      // the ranking table's canonical name ("Allbridge Core") — same alias
-      // lookup, so trend data isn't silently dropped for that one protocol.
+      // Same daily series, split per protocol instead of summed — only kept
+      // for protocols that survived the CEX filter above, so a selector built
+      // from this can't offer a protocol that isn't in the ranking table.
+      // Raw names (e.g. "Allbridge Classic") are run through the same alias
+      // map so trend data isn't silently dropped for that one protocol.
       const rankedNames = new Set(protocols.map((p) => p.name));
       // Object.create(null), not {} — protocol names come from DeFiLlama, a
       // third party we don't control, so a plain {} risks the same silent

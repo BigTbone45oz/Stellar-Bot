@@ -6,13 +6,8 @@ import { useAsyncResource } from '../hooks/useAsyncResource.js';
 
 const TOTAL_OPTION = 'Total (all protocols)';
 
-// DeFiLlama's ranking table names Blend's 4 products separately (Pools,
-// Pools V2, Backstop, Backstop V2), but the Dune-backed function-call
-// breakdown (contracts.js's /protocol-functions) aggregates ALL of Blend's
-// Soroban contracts into one bucket — it can't be split by product the way
-// DeFiLlama's TVL rows are. All 4 Blend rows below intentionally map to the
-// same aggregate key; the expanded view says so explicitly rather than
-// implying each row has its own distinct breakdown.
+// DeFiLlama lists Blend's 4 products separately, but the Dune-backed function-call
+// breakdown can't split by product — all 4 map to one aggregate key here.
 const PROTOCOL_FUNCTIONS_ALIAS = {
   Soroswap: 'Soroswap',
   'Sushi Stellar': 'Sushi',
@@ -39,30 +34,23 @@ export default function Protocols({ network }) {
   const [expandedProtocol, setExpandedProtocol] = useState(null);
 
   const { data, error, loading } = useAsyncResource(() => api.protocolsRanking(network), [network], {
-    // Without this, a failed refetch (network switch, or a transient
-    // DeFiLlama error) would leave the previous network's ranking table/chart
-    // on screen, rendered alongside the new error, with nothing marking it
-    // stale — and the trend/expand selections would keep pointing at the old
-    // network's protocol names.
+    // Reset selections on a failed/network-switch refetch so they don't keep
+    // pointing at the old network's protocol names.
     onReset: () => {
       setTrendSelection(TOTAL_OPTION);
       setExpandedProtocol(null);
     },
   });
 
-  // Real function-call breakdown per protocol (server/src/routes/contracts.js's
-  // /protocol-functions, Dune-backed) — fetched once alongside the ranking,
-  // not per-row, since it's the same small payload regardless of which row
-  // gets expanded.
+  // Fetched once alongside the ranking (not per-row) — same small payload regardless
+  // of which row is expanded.
   const {
     data: protocolFunctions,
     error: protocolFunctionsError,
     loading: protocolFunctionsLoading,
   } = useAsyncResource(() => api.contractsProtocolFunctions(network), [network]);
 
-  // Protocols actually worth offering in the selector — only those DeFiLlama
-  // reports daily volume for (TVL-only protocols like lending have no trend data
-  // to select), sorted to match the ranking table below.
+  // Only protocols DeFiLlama reports daily volume for (TVL-only ones have no trend data).
   const trendOptions = useMemo(() => {
     if (!data?.available) return [];
     return data.protocols.filter((p) => data.volumeTrendByProtocol[p.name]).map((p) => p.name);
@@ -74,11 +62,9 @@ export default function Protocols({ network }) {
     return data.volumeTrendByProtocol[trendSelection] || [];
   }, [data, trendSelection]);
 
-  // If the fetched protocol list no longer contains the currently-selected
-  // protocol (network switch, or DeFiLlama's tracked set shifting between
-  // fetches), fall back to the total rather than leaving the <select> pointed
-  // at an option that no longer exists (which silently shows an empty chart
-  // labeled with a stale protocol name).
+  // Fall back to the total if the selected protocol drops out of the fetched list
+  // (network switch, or DeFiLlama's tracked set shifting) rather than leaving the
+  // <select> pointed at an option that no longer exists.
   useEffect(() => {
     if (trendSelection !== TOTAL_OPTION && !trendOptions.includes(trendSelection)) {
       setTrendSelection(TOTAL_OPTION);

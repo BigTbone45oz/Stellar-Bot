@@ -13,19 +13,12 @@ function formatUsd(n) {
 }
 
 export default function Overview({ network }) {
-  // Network health — the one thing on this page genuinely worth polling
-  // (latest ledger, base fee change every few seconds); everything else below
-  // is fetched once per network, not on a poll — see that block's own comment.
+  // Only network health (latest ledger, base fee) is polled — it changes every
+  // few seconds. Everything below is fetched once per network: it's backed by
+  // Dune/DeFiLlama caches or a 24h window, none of which change fast enough to
+  // justify re-fetching every 30s.
   const { data: overview, error } = usePolledResource(() => api.overview(network), [network], { intervalMs: 30_000 });
 
-  // Everything below is a summary of the other tabs' own data — fetched once per
-  // network, NOT on the 30s poll above. That poll exists because network health
-  // (latest ledger, base fee) genuinely changes every few seconds; these don't —
-  // they're backed by Dune (cached server-side for hours) or DeFiLlama (cached
-  // hourly) or a 24h Horizon operations window, none of which benefit from
-  // being re-fetched every 30s. Re-polling them that often would just be wasted
-  // requests against data that hasn't changed, the same class of inefficiency
-  // this codebase has specifically avoided elsewhere (see cache.js's TTL tiers).
   const { data: contractsAllTime, error: contractsAllTimeError } = useAsyncResource(
     () => api.contractsAllTime(network),
     [network]
@@ -44,9 +37,7 @@ export default function Overview({ network }) {
   );
   const { data: topAssets, error: topAssetsError } = useAsyncResource(() => api.topAssets(network), [network]);
   const { data: recentOps, error: recentOpsError } = useAsyncResource(() => {
-    // Computed fresh per fetch (not once at module load, and not as a
-    // resetDep either) so "last 24h" stays actually true if this tab is left
-    // open for a while, without re-triggering the fetch every render.
+    // Computed fresh per fetch so "last 24h" stays accurate without re-triggering on every render.
     const recentOpsRange = defaultRange(24);
     return api.opsBreakdown(network, recentOpsRange.start, recentOpsRange.end);
   }, [network]);

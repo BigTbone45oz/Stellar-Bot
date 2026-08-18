@@ -24,10 +24,9 @@ export function cacheSet(key, value, ttlMs) {
   store.set(key, { value, expiresAt: Date.now() + ttlMs });
 }
 
-/**
- * Picks TTL.FINALIZED if the range's end is safely in the past, otherwise TTL.RECENT.
- * This is the "immutable history vs. live data" rule from the plan.
- */
+// Historical Horizon data is immutable once a ledger closes and is safely in
+// the past, so it can be cached indefinitely (long TTL); only ranges that
+// touch "now" need a short one.
 export function ttlForRange(endTimeMs) {
   const bufferMs = 5 * 60 * 1000; // 5 min safety margin behind "now"
   return endTimeMs < Date.now() - bufferMs ? TTL.FINALIZED : TTL.RECENT;
@@ -41,9 +40,8 @@ export async function cached(key, ttlMs, fn) {
   return value;
 }
 
-// Store only checks/evicts on read, so an entry that's never read again would
-// otherwise sit in memory forever. Sweep periodically rather than letting a
-// long-running dev session grow unbounded.
+// Entries are only evicted on read, so an entry never read again would sit in
+// memory forever without this periodic sweep.
 setInterval(() => {
   const now = Date.now();
   for (const [key, entry] of store.entries()) {

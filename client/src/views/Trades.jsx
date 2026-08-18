@@ -5,7 +5,7 @@ import { useAsyncResource } from '../hooks/useAsyncResource.js';
 export default function Trades({ network }) {
   const [code, setCode] = useState('');
   const [issuer, setIssuer] = useState('');
-  // Manual, button-triggered lookup — enabled: false, same as Accounts.jsx.
+  // Manual, button-triggered lookup.
   const {
     data,
     error,
@@ -14,9 +14,8 @@ export default function Trades({ network }) {
   } = useAsyncResource((c, iss) => api.recentTrades(network, c, iss), [network], { enabled: false });
 
   const trades = data || [];
-  // "Loaded, zero trades" vs. "never loaded" no longer needs its own boolean —
-  // data/error are both null until the first request resolves one way or the
-  // other, and both get reset to null together on a network switch.
+  // data/error are both null until the first request resolves, so this doubles
+  // as "has a request completed" without a separate boolean.
   const loaded = data !== null || error !== null;
 
   return (

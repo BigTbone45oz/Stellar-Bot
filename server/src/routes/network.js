@@ -31,8 +31,8 @@ router.get('/recent-ledgers', async (req, res, next) => {
   try {
     const net = resolveNetwork(req.query.network);
     const horizon = makeHorizonClient(net.horizon);
-    // Clamped both directions — 0/negative previously passed straight to Horizon
-    // and surfaced as a raw upstream error instead of a clean default.
+    // Clamped both directions — 0/negative would otherwise pass straight to
+    // Horizon and surface as a raw upstream error.
     const limit = Math.min(Math.max(Number(req.query.limit) || 10, 1), 50);
 
     const data = await cached(`recentLedgers:${net.key}:${limit}`, TTL.LIVE, async () => {

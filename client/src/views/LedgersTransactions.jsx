@@ -6,14 +6,9 @@ import { defaultRange } from '../dateUtils.js';
 import { useAsyncResource } from '../hooks/useAsyncResource.js';
 
 // ledgers.js's parallel fetch is capped at 130,000 ledgers (~7.9 days of pubnet
-// history) as a safety valve against runaway ranges — raised from an earlier, more
-// conservative 50,000 (~2.9 days) specifically to fit a 7d preset. Offering 30d/90d
-// presets here — even though DateRangePicker supports them elsewhere — would mean
-// every click burns through several minutes of chunked Horizon requests (and real
-// risk of hitting Horizon's public rate limit, since there's no retry/backoff for
-// that yet) just to silently discard most of it past the cap. Restricting both the
-// presets and the default to what this specific route can actually deliver without
-// truncating or taking too long.
+// history). Longer presets (30d/90d) would burn minutes of chunked Horizon
+// requests just to be discarded past the cap, so presets/default are capped to
+// what this route can actually deliver without truncating.
 const LEDGER_RANGE_PRESETS = [
   { label: '6h', hours: 6 },
   { label: '24h', hours: 24 },

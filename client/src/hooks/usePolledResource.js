@@ -1,14 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 
-// Same reset-on-dep-change guarantee as useAsyncResource, but for the one
-// polling case in this codebase (Overview.jsx's network-health stats: a 30s
-// interval + immediate refresh on tab visibilitychange, since network health
-// is the one thing that's genuinely worth polling — see useAsyncResource's
-// own comment for why the reset-before-fetch pattern matters). Kept as a
-// separate hook rather than folded into useAsyncResource's single-shot
-// "fetch once per dep change" contract — conflating "fetch once" with "fetch
-// repeatedly, deps just control the reset boundary" would make the primary
-// hook harder to reason about for a shape only one view currently needs.
+// Same reset-on-dep-change guarantee as useAsyncResource, but for polling: a 30s
+// interval plus immediate refresh on tab visibilitychange. Kept separate from
+// useAsyncResource's single-shot "fetch once per dep change" contract rather than
+// folding "fetch repeatedly" into it.
 export function usePolledResource(fetcher, resetDeps, { intervalMs, pauseWhenHidden = true } = {}) {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
@@ -25,9 +20,8 @@ export function usePolledResource(fetcher, resetDeps, { intervalMs, pauseWhenHid
     setError(null);
 
     async function load() {
-      // Skip while the tab is hidden — no point polling for a chart nobody's
-      // looking at. Refreshes immediately on visibilitychange instead, so
-      // data isn't stale when the user comes back.
+      // Skip while the tab is hidden; visibilitychange triggers an immediate
+      // refresh instead, so data isn't stale when the user comes back.
       if (pauseWhenHidden && document.visibilityState === 'hidden') return;
       const myGeneration = ++generationRef.current;
       try {
@@ -37,14 +31,9 @@ export function usePolledResource(fetcher, resetDeps, { intervalMs, pauseWhenHid
         setError(null);
       } catch (e) {
         if (cancelled || generationRef.current !== myGeneration) return;
-        // Deliberately does NOT clear `data` here, unlike useAsyncResource's
-        // run() — this is stale-while-revalidate by design: a live-health
-        // widget polling every 30s should keep showing the last-known-good
-        // ledger/fee numbers through one flaky poll, with an error banner
-        // alongside them, rather than blanking the whole panel on every
-        // transient failure. Not the same situation as a manual lookup
-        // (Accounts/Trades/Assets search), where a NEW request replacing an
-        // UNRELATED previous result should discard it on failure.
+        // Deliberately does not clear `data` here (unlike useAsyncResource's
+        // run()) — stale-while-revalidate by design, so a flaky poll shows an
+        // error banner alongside the last-known-good values instead of blanking.
         setError(e.message);
       }
     }

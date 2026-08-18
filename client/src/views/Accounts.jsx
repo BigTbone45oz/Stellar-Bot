@@ -5,10 +5,8 @@ import { useAsyncResource } from '../hooks/useAsyncResource.js';
 
 export default function Accounts({ network }) {
   const [input, setInput] = useState('');
-  // enabled: false — this is a manual, button-triggered lookup, not an
-  // auto-fetch-on-dep-change. The hook's own [network] resetDeps still fires
-  // on a network switch though, clearing a previous lookup's stale result
-  // (and safely dropping an in-flight one) even though nothing auto-fetches.
+  // enabled: false — manual, button-triggered lookup. [network] resetDeps still
+  // clears a stale result (and drops an in-flight one) on network switch.
   const {
     data: account,
     error,

@@ -21,11 +21,10 @@ export function makeSorobanClient(rpcUrl, timeoutMs = 10_000) {
         body: JSON.stringify({ jsonrpc: '2.0', id: idCounter++, method, params }),
         signal: controller.signal,
       });
-      // Unlike horizonClient.js, this previously went straight to res.json() with
-      // no res.ok check — a gateway timeout/outage returning an HTML or plain-text
-      // error body (a common failure mode for a proxy in front of an RPC node)
-      // would throw a raw, unstructured SyntaxError from res.json() instead of a
-      // clean upstream-error response.
+      // A gateway timeout/outage can return an HTML or plain-text error body
+      // (common for a proxy in front of an RPC node) — check res.ok before
+      // parsing so that surfaces as a clean upstream error, not a raw
+      // SyntaxError from res.json().
       if (!res.ok) {
         const body = await res.text().catch(() => '');
         throw httpError(502, `Soroban RPC request (${method}) failed (${res.status}): ${body.slice(0, 300)}`);

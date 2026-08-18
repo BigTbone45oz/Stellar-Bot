@@ -13,9 +13,8 @@ const VOLUME_WINDOWS = [
   { value: '30d', label: '30d volume' },
 ];
 
-// Plain-language summaries of StellarExpert's own documented asset-rating methodology
-// (each is a 0-10 sub-score, logarithmic, that rolls up into `average`) — not something
-// this app computes itself, just explained here so the numbers aren't a mystery.
+// Plain-language summaries of StellarExpert's asset-rating methodology (each a 0-10
+// sub-score rolling up into `average`) — not computed by this app, just explained here.
 const RATING_INFO = {
   age: 'How long this asset has existed on the network — older, established assets score higher.',
   activity: 'Overall usage — combines the number of trades and payments made in this asset.',
@@ -31,20 +30,16 @@ function assetKey(a) {
 }
 
 // Key format the /details batch endpoint expects and echoes back as a result key.
-// Native XLM has no issuer — the server treats CODE:: (empty issuer) as native and
-// computes its liquidity/volume against a reference pair instead (see
-// NATIVE_REFERENCE_ASSET server-side), rather than leaving its row blank.
+// Must match exactly. Native XLM has no issuer — the server treats CODE:: (empty
+// issuer) as native and prices it against a reference pair rather than leaving it blank.
 function detailsKeyFor(a) {
   return `${a.code}:${a.issuer || ''}:${a.domain || ''}`;
 }
 
-// `details` state is cached across page flips AND volume-window changes, but the
-// server's response for a given asset carries window-specific volume data — a raw
-// detailsKeyFor() key would let a stale window's volume render under a newly
-// selected window's label until the new fetch resolves. Namespacing the LOCAL
-// cache key by volumeWindow (never sent to/expected from the server — see
-// detailsKeyFor's own comment) fixes that, and doubles as the "do I already have
-// this" check that skips redundant refetches on page/window flip-backs.
+// `details` is cached across page flips AND volume-window changes, but the server's
+// response carries window-specific volume data. Namespacing the LOCAL cache key by
+// volumeWindow (never sent to the server) keeps a stale window's volume from rendering
+// under a newly selected window's label, and doubles as the "already fetched" check.
 function localDetailsKey(a, volumeWindow) {
   return `${detailsKeyFor(a)}:${volumeWindow}`;
 }
@@ -60,17 +55,15 @@ function formatNum(n) {
 
 export default function Assets({ network }) {
   const [code, setCode] = useState('');
-  const [range, setRange] = useState(defaultRange(720)); // 30 days — no truncation risk here,
-                                                            // trade_aggregations is server-aggregated by Horizon
+  const [range, setRange] = useState(defaultRange(720)); // 30 days; trade_aggregations is
+                                                            // server-aggregated, no truncation risk
   const [page, setPage] = useState(0);
 
-  // Per-asset detail lazily fetched only for the currently visible page — real display
-  // name, live order-book depth, and windowed volume. Keyed by detailsKeyFor().
+  // Lazily fetched per visible page: display name, order-book depth, windowed volume.
   const [details, setDetails] = useState({});
   const [volumeWindow, setVolumeWindow] = useState('7d');
 
-  // The single expanded row, shared by both the top-100 table and the code-search
-  // results below — only one asset's detail panel is ever open at a time.
+  // Shared between the top-100 table and code-search results — only one detail panel open at a time.
   const [expanded, setExpanded] = useState(null);
   const [openRatingDim, setOpenRatingDim] = useState(null);
 
@@ -79,12 +72,9 @@ export default function Assets({ network }) {
     error: topError,
     loading: topLoading,
   } = useAsyncResource(() => api.topAssets(network), [network], {
-    // page/details/expanded/openRatingDim aren't fetched data of their own —
-    // they're plain UI state scoped to whichever network's top-100 table is
-    // showing, so they're reset here rather than needing their own hooks.
-    // (The search and price-history state below don't need to be reset here
-    // too — each already has `network` in its own resetDeps, so each resets
-    // itself independently the moment the network changes.)
+    // page/details/expanded/openRatingDim are plain UI state scoped to the top-100
+    // table, reset here rather than via their own hooks. Search and price-history
+    // state don't need this — each has `network` in its own resetDeps already.
     onReset: () => {
       setPage(0);
       setDetails({});
@@ -100,19 +90,13 @@ export default function Assets({ network }) {
     [topAssets, page]
   );
 
-  // Fetch name/liquidity/windowed-volume for whichever 15 assets are on-screen right
-  // now — never for all 100 at once. Re-fetches when the page or volume window changes;
-  // results accumulate in `details` so flipping back to an already-seen page is instant.
-  // Native XLM is included too — the server computes it against a reference pair
-  // rather than leaving it blank (see detailsKeyFor). Not a useAsyncResource: this is
-  // a best-effort MERGE into existing `details` (not a replace), silently swallows
-  // errors, and has no loading/error state of its own — a genuinely different shape.
+  // Fetches details only for the 15 on-screen assets, not all 100. Not a
+  // useAsyncResource: this MERGES into existing `details` rather than replacing it,
+  // and swallows errors best-effort with no loading/error state of its own.
   useEffect(() => {
     if (pageAssets.length === 0) return;
-    // Skip the fetch entirely if every asset on this page already has a
-    // details entry for the CURRENT volume window — flipping back to an
-    // already-seen page+window combo is then genuinely free, not just
-    // display-instant while still re-hitting the network every time.
+    // Skip if every asset on this page already has a details entry for the current
+    // volume window, so revisiting a seen page+window doesn't re-hit the network.
     const needsFetch = pageAssets.some((a) => !(localDetailsKey(a, volumeWindow) in details));
     if (!needsFetch) return;
     let cancelled = false;
@@ -136,35 +120,27 @@ export default function Assets({ network }) {
     };
   }, [network, pageAssets, volumeWindow, details]);
 
-  // Manual, code-triggered search — enabled: false, same shape as Accounts.jsx/
-  // Trades.jsx. `network` is still in resetDeps so a network switch clears a
-  // previous search's results even though nothing auto-fetches.
+  // Manual search — enabled: false; `network` still in resetDeps to clear stale results.
   const {
     data: searchResults,
     error: searchError,
     run: runSearch,
   } = useAsyncResource((c) => api.assetSearch(network, c), [network], { enabled: false });
   const results = searchResults || [];
-  // "Searched, found nothing" vs. "never searched" — same collapse as
-  // Trades.jsx's `loaded`: both start null and only one of them is non-null
-  // once a search actually resolves.
+  // "Searched, found nothing" vs. "never searched": both start null, only one
+  // becomes non-null once a search resolves.
   const searched = searchResults !== null || searchError !== null;
 
   function search() {
     if (code) runSearch(code);
   }
 
-  // Price/volume history for whichever asset is expanded — only fires for a
-  // non-native asset (XLM has no issuer to chart against itself; see the
-  // native branch in renderDetail). `expanded` itself is reset by the
-  // topAssets hook's onReset above, but that reset lands one render AFTER
-  // this hook's own resetDeps (which also include `network`) fire — both
-  // hooks' deps-effects run in the same commit, so on a network switch this
-  // effect can still see the OLD `expanded` alongside the NEW `network` for
-  // one pass. `expandedForNetwork` (set in toggleExpand) guards against that:
-  // if it doesn't match the current network, this is exactly that stale
-  // window, so `enabled` is false rather than firing a real request for the
-  // wrong asset/network pairing.
+  // Price/volume history for the expanded asset (native XLM has no issuer to chart
+  // against itself — see the native branch in renderDetail). On a network switch,
+  // this effect's resetDeps and the topAssets hook's onReset (which clears
+  // `expanded`) fire in the same commit, so this can still see the OLD `expanded`
+  // alongside the NEW `network` for one render. `expandedForNetwork` (set in
+  // toggleExpand) guards against firing a request for that stale pairing.
   const {
     data: historyData,
     error,
@@ -177,8 +153,7 @@ export default function Assets({ network }) {
   const history = historyData?.records ?? null;
   const historyTruncated = historyData?.truncated ?? false;
 
-  // Computed once and reused by both charts below, instead of mapping the
-  // same array twice per render.
+  // Computed once, reused by both charts below.
   const chartData = useMemo(
     () => history?.map((h) => ({ ...h, date: new Date(h.timestamp).toISOString().slice(0, 10) })),
     [history]
@@ -186,13 +161,7 @@ export default function Assets({ network }) {
 
   function toggleExpand(asset) {
     setOpenRatingDim(null);
-    // Tagged with the network it was expanded under — see the price-history
-    // hook below for why: on a network switch, this hook's own resetDeps
-    // (which include `network`) fire in the SAME commit as the topAssets
-    // hook's onReset (which clears `expanded`), but React effects for that
-    // commit still see THIS render's `expanded` value — the clear only takes
-    // effect next render. Without the tag, that one-render window would fire
-    // a real request for the OLD asset against the NEW network.
+    // Tagged with the network it was expanded under — see the price-history hook above.
     setExpanded((prev) => (prev && assetKey(prev) === assetKey(asset) ? null : { ...asset, expandedForNetwork: network }));
   }
 

@@ -8,9 +8,7 @@ async function request(path, params = {}) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error || `Request failed (${res.status})`);
   }
-  // Same safe-parse guard as the error path above (and as sorobanClient.js
-  // server-side) — a 200 with a non-JSON body (e.g. a misconfigured proxy)
-  // should surface as a clear error, not a raw SyntaxError.
+  // Guard against a 200 with a non-JSON body (e.g. misconfigured proxy).
   return res.json().catch(() => {
     throw new Error('Request succeeded but response was not valid JSON');
   });

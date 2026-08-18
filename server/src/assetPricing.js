@@ -2,9 +2,8 @@ import { STELLAR_EXPERT_URL } from './config.js';
 import { fetchJsonOrNull } from './fetchWithTimeout.js';
 import { cached, TTL } from './cache.js';
 
-// USD price for one asset, via StellarExpert's asset-detail endpoint (`price` field
-// confirmed to be USD, not XLM — see assets.js). Best-effort: returns null on any
-// failure rather than blocking the caller on a third-party price lookup.
+// StellarExpert's asset-detail `price` field is USD, not XLM. Best-effort: returns
+// null on any failure rather than blocking the caller on a third-party lookup.
 export async function fetchAssetUsdPrice(expertNetwork, code, issuer) {
   const assetId = code === 'XLM' ? 'XLM' : `${code}-${issuer}`;
   const data = await fetchJsonOrNull(`${STELLAR_EXPERT_URL}/explorer/${expertNetwork}/asset/${assetId}`, {
@@ -15,10 +14,7 @@ export async function fetchAssetUsdPrice(expertNetwork, code, issuer) {
 
 // USD-prices a list of { code, issuer, ...amountField } entries in place, using
 // a bounded worker pool (independent per-entry lookups, no reason to serialize).
-// Shared by payments.js's contract-movement/payment-movement passes and
-// contracts.js's /all-time route — those two had drifted into two separately
-// hand-maintained copies (one keyed its amount field `total`, the other
-// `totalAmount`) before being unified here.
+// `amountField` is configurable since callers key their amount differently.
 export async function priceMovementList(movementList, expertNetwork, netKey, amountField = 'total') {
   if (!expertNetwork) {
     for (const entry of movementList) {
@@ -43,11 +39,8 @@ export async function priceMovementList(movementList, expertNetwork, netKey, amo
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, movementList.length) || 1 }, priceWorker));
 }
 
-// Sorts a priced movement list by USD value when known (what "top assets
-// moved" should mean), falling back to a raw-amount field for anything price
-// lookup failed on — those still get listed, just pushed below the priced
-// ones rather than dropped, so a failed price lookup can't silently hide
-// real activity.
+// Sorts by USD value when known; entries with a failed price lookup fall back
+// to a raw-amount field and sort below priced ones, rather than being dropped.
 export function sortMovementList(movementList, fallbackField = 'changeCount') {
   movementList.sort((a, b) => {
     if (a.totalUsd !== null && b.totalUsd !== null) return b.totalUsd - a.totalUsd;

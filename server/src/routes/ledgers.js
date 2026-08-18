@@ -25,20 +25,16 @@ router.get('/volume', async (req, res, next) => {
 
       const byDay = new Map(); // 'YYYY-MM-DD' -> { transactions, operations, ledgers }
 
-      // /ledgers has exactly one record per ledger, so a 200-ledger chunk maps to
-      // exactly one Horizon page — chunks fetch in parallel instead of the old
-      // sequential cursor-walk (was ~250 sequential requests for a default 7-day
-      // range; now the same request count runs in parallel batches).
+      // /ledgers has exactly one record per ledger, so a 200-ledger chunk maps
+      // to exactly one Horizon page — chunks fetch in parallel.
       const { truncated } = await fetchRangeParallel(horizon, '/ledgers', startSeq, endSeq, {
         ledgersPerChunk: 200,
-        // Safety cap, not a hard technical limit — ledgers close every ~5s, so this is
-        // ~7.9 days of pubnet history. Sized to match the widest preset the client
-        // offers (7d, see LedgersTransactions.jsx); a 7d fetch is ~605 chunked Horizon
-        // requests and takes on the order of 30-45s. Cached after the first fetch, so
-        // only slow once per (network, range). Deliberately not raised further than
-        // this without also adding retry/backoff for Horizon's 429 rate-limiting —
-        // horizonClient.js currently has none, so a much wider range risks a hard
-        // failure mid-fetch instead of a graceful truncation.
+        // Safety cap, not a hard technical limit — ledgers close every ~5s, so
+        // this is ~7.9 days of pubnet history, matching the widest client
+        // preset (7d, see LedgersTransactions.jsx). Not raised further without
+        // also adding retry/backoff for Horizon's 429 rate-limiting
+        // (horizonClient.js currently has none) — a much wider range risks a
+        // hard failure mid-fetch instead of a graceful truncation.
         maxRecords: 130_000,
         onPage: (records) => {
           for (const l of records) {

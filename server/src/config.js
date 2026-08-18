@@ -13,28 +13,17 @@ export const NETWORKS = {
   },
 };
 
-// Third-party (not Horizon/Soroban RPC), used as a best-effort optimization with a
-// built-in fallback — see ledgerTime.js. Configurable for the same reason the URLs
-// above are: testing against a mock, or if the upstream URL ever changes.
+// Third-party best-effort optimization with a built-in fallback — see ledgerTime.js.
 export const STELLAR_EXPERT_URL = process.env.STELLAR_EXPERT_URL || 'https://api.stellar.expert';
 
-// Powers the all-time Soroban asset-movement stat on the Smart Contracts page —
-// see contracts.js's /all-time route and duneClient.js. Both optional: the route
-// degrades to "unavailable" rather than erroring when either is unset.
+// Both optional: routes degrade to "unavailable" rather than erroring when unset.
 export const DUNE_API_KEY = process.env.DUNE_API_KEY || null;
 export const DUNE_QUERY_ID = process.env.DUNE_QUERY_ID || null;
 export const DUNE_SOROSWAP_TREND_QUERY_ID = process.env.DUNE_SOROSWAP_TREND_QUERY_ID || null;
 export const DUNE_SOROSWAP_FUNCTIONS_QUERY_ID = process.env.DUNE_SOROSWAP_FUNCTIONS_QUERY_ID || null;
 export const DUNE_NETWORK_TRADES_QUERY_ID = process.env.DUNE_NETWORK_TRADES_QUERY_ID || null;
-// Powers the account-creation/closure trend on the Network Growth page — see
-// routes/growth.js's /account-trend route.
 export const DUNE_ACCOUNT_GROWTH_QUERY_ID = process.env.DUNE_ACCOUNT_GROWTH_QUERY_ID || null;
-// Powers the per-asset trustline growth breakdown on the Network Growth page —
-// see routes/growth.js's /trustline-trend route.
 export const DUNE_TRUSTLINE_GROWTH_QUERY_ID = process.env.DUNE_TRUSTLINE_GROWTH_QUERY_ID || null;
-// Powers the multi-protocol function-call breakdown on the Smart Contracts page
-// (real usage per protocol — Aquarius, Soroswap, Sushi, Blend, Phoenix — not
-// just Soroswap) — see routes/contracts.js's /protocol-functions route.
 export const DUNE_PROTOCOL_FUNCTIONS_QUERY_ID = process.env.DUNE_PROTOCOL_FUNCTIONS_QUERY_ID || null;
 
 export function resolveNetwork(param) {
@@ -44,9 +33,5 @@ export function resolveNetwork(param) {
 
 export const PORT = process.env.PORT || 8787;
 
-// Shared by growth.js's /account-trend and protocols.js's /ranking — both
-// trim a full-history Dune/DeFiLlama series down to a chart-sized trailing
-// window before it reaches the client. Was independently declared as the
-// same value (180) in both files before being pulled out here, so a future
-// change to one doesn't silently desync the two trend charts' window sizes.
+// Trailing-window size for chart-bound trend series (growth.js, protocols.js).
 export const TREND_DAYS = 180;

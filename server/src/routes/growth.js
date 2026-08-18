@@ -12,47 +12,31 @@ const TOP_TRUSTLINE_ASSETS_SHOWN = 15;
 
 const router = Router();
 
-// The underlying query covers Stellar's full history (back to 2015, ~3,950
-// days as of this writing) — trimmed to a trailing window before it reaches
-// the client (TREND_DAYS, shared with protocols.js's /ranking — see
-// config.js): a chart-sized payload, not a decade of daily points on every
-// page load. Totals below are computed from the FULL untrimmed result, not
-// just this window.
-
-// Row shape (r.day, r.accounts_created, r.accounts_merged) verified live
-// against the actual saved query (dune.com/queries/8363713): real rows came
-// back with those exact keys, data spanning 2015-09-30 through today (3,949
-// days), 31.2M accounts created / 13.8M merged all-time — sane numbers, not
-// just a shape that happened to parse.
-//
-// Day-bucketed account creation/closure trend, all-time — Horizon has no
+// Day-bucketed account creation/closure trend, all-time. Horizon has no
 // aggregate "operations by type per day" endpoint, and enumerating raw
-// /operations live (as payments.js's /breakdown does) hits a hard record cap
-// within hours on a busy network (verified live: even a 6h window can exceed
-// the 20,000-op cap) — nowhere near enough to show a real multi-day/week/month
-// trend. Backed by a saved Dune query against stellar.history_operations
-// instead, same shape as contracts.js's /all-time and /protocol-trend routes.
-// Pubnet-only, same reasoning as those (Dune doesn't index testnet, and
-// testnet's periodic resets make an all-time trend meaningless there anyway).
+// /operations live hits payments.js's /breakdown record cap within hours on a
+// busy network — nowhere near enough for a multi-month trend. Backed by a
+// saved Dune query against stellar.history_operations instead. Pubnet-only —
+// Dune doesn't index testnet, and testnet's periodic resets make an all-time
+// trend meaningless there anyway.
+//
+// The query covers full history back to 2015; trimmed to a trailing window
+// (TREND_DAYS, shared with protocols.js's /ranking) before reaching the
+// client. Totals below are computed from the full untrimmed result.
 router.get('/account-trend', async (req, res, next) => {
   try {
     const net = resolveNetwork(req.query.network);
     const unavailable = duneRouteUnavailable(net, DUNE_ACCOUNT_GROWTH_QUERY_ID, 'DUNE_ACCOUNT_GROWTH_QUERY_ID', 'Account growth trend');
     if (unavailable) return res.json(unavailable);
 
-    // Dune's own materialized result barely changes minute-to-minute (it only
-    // refreshes when the saved query is re-run) — cached generously, same as
-    // the other Dune-backed routes.
+    // Dune's materialized result only changes when the saved query is
+    // re-run — cached generously.
     const data = await cached('growthAccountTrend:pubnet', TTL.FINALIZED, async () => {
       const rows = await fetchDuneQueryResults(DUNE_ACCOUNT_GROWTH_QUERY_ID);
 
-      // Grouped by day rather than assuming the query emits exactly one row
-      // per day — same defensive shape as /trustline-trend's Map below and
-      // contracts.js's /protocol-trend, in case a future query re-shape (or a
-      // grouping dimension added later) ever produces duplicate day rows;
-      // without this, duplicates wouldn't merge and would silently shrink the
-      // number of distinct calendar days covered by the trailing-window cutoff
-      // below.
+      // Grouped by day rather than assuming one row per day, in case a future
+      // query re-shape produces duplicate day rows (would otherwise silently
+      // shrink the calendar-day count under the cutoff filter below).
       const byDay = new Map();
       for (const r of rows) {
         const entry = byDay.get(r.day) || { day: r.day, accountsCreated: 0, accountsMerged: 0 };
@@ -70,10 +54,8 @@ router.get('/account-trend', async (req, res, next) => {
 
       // Filtered by an actual date cutoff, not a trailing array slice — the
       // Dune query only emits a row for days with at least one matching
-      // operation, so a day with zero account creates/merges simply has no
-      // row. Slicing the last TREND_DAYS *entries* would silently reach
-      // further back than TREND_DAYS *calendar days* whenever such a gap
-      // exists, while still being labeled "last 180 days" on the client.
+      // operation, so slicing the last N entries could silently reach further
+      // back than N calendar days whenever a gap day exists.
       const cutoffDay = new Date(Date.now() - TREND_DAYS * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
       const daily = allDaily.filter((d) => d.day >= cutoffDay);
 
@@ -93,17 +75,10 @@ router.get('/account-trend', async (req, res, next) => {
   }
 });
 
-// Row shape (r.asset_code, r.asset_issuer, r.trustline_changes) verified live
-// against the actual saved query (dune.com/queries/8363720): real rows came
-// back with those exact keys, 403.3M total trustline changes, top asset USDC
-// at 8.08M — sane numbers, not just a shape that happened to parse.
-//
-// Which specific assets are actually gaining/losing trustlines, not just a
-// network-wide total — same "can't come from live Horizon at this scope"
-// reasoning as /account-trend above. Ranked by all-time trustline-change
-// count rather than shown as a daily-per-asset trend (a lot of chart
-// complexity for a first pass — worth adding later if the ranked list alone
-// isn't enough).
+// Per-asset trustline gain/loss, not just a network-wide total — same
+// "can't come from live Horizon at this scope" reasoning as /account-trend
+// above. Ranked by all-time trustline-change count rather than a
+// daily-per-asset trend (simpler first pass).
 router.get('/trustline-trend', async (req, res, next) => {
   try {
     const net = resolveNetwork(req.query.network);

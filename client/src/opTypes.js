@@ -1,12 +1,8 @@
 // Horizon's operation `type` field is a snake_case API identifier, not a display
-// name (e.g. "path_payment_strict_send", "begin_sponsoring_future_reserves"). This
-// maps each of the 27 operation types Stellar's protocol defines to the proper name
-// and a one-line description, both taken from Stellar's own docs
+// name. Maps each operation type to a proper label/description, per Stellar's docs
 // (developers.stellar.org/docs/learn/fundamentals/transactions/list-of-operations),
-// plus the two that page doesn't cover but Horizon still returns: `inflation`
-// (disabled network-wide since 2019, but still a valid historical operation type)
-// and `restore_footprint` (Soroban state archival, added after that page's
-// operation count was last written — described from the Soroban docs instead).
+// plus `inflation` (disabled since 2019 but still a valid historical type) and
+// `restore_footprint` (Soroban state archival), neither covered by that page.
 export const OPERATION_TYPES = {
   create_account: {
     label: 'Create Account',
@@ -136,15 +132,8 @@ export function operationTypeDescription(type) {
 }
 
 // A single Horizon operation `type` ("invoke_host_function") covers three
-// meaningfully different actions, distinguished by the op's own `function` field.
-// Confirmed live against Horizon (Aug 2026 mainnet operations):
-//   "HostFunctionTypeHostFunctionTypeInvokeContract"
-// The other two below follow the exact same naming pattern (verified via
-// @stellar/stellar-sdk's xdr.HostFunctionType enum, which has exactly these three
-// members: hostFunctionTypeInvokeContract / …CreateContract / …UploadContractWasm)
-// but weren't independently spotted in a live sample — they're rare (one-time
-// per contract deployment) next to routine invocations. Worth a re-check against
-// real data if this table ever renders one as "Unknown".
+// meaningfully different actions, distinguished by the op's own `function` field:
+// invoke/create/upload-wasm (see @stellar/stellar-sdk's xdr.HostFunctionType enum).
 export const HOST_FUNCTION_TYPES = {
   HostFunctionTypeHostFunctionTypeInvokeContract: {
     label: 'Invoke Contract',

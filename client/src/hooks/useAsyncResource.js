@@ -1,38 +1,25 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-// Fixes a bug class that kept recurring across this codebase: a fetch effect
-// that doesn't reset its own state before firing a new request, so a failed
-// refetch (network switch, transient error) leaves the PREVIOUS request's
-// data rendering on screen alongside the new error message — most render
-// guards only checked `!loading`, not `!error`. Found and fixed piecemeal in
-// well over a dozen places (Overview, Accounts, Trades, Assets, Protocols,
-// SmartContracts, LedgersTransactions, PaymentsOperations, NetworkGrowth)
-// before being pulled out here, because nothing structurally stopped a new
-// effect from omitting the reset — it was a convention, not a rule the code
-// enforced. This hook makes the reset the hook's job, not the caller's.
+// Ensures every fetch resets its own `data`/`error` state before a new request
+// fires, so a failed refetch (network switch, transient error) never leaves the
+// PREVIOUS request's data rendering on screen alongside the new error.
 //
-// One generation counter (not a `cancelled` boolean) guards every completion
-// — a boolean handles unmount/dep-change, but not two overlapping calls of
-// the SAME generation (e.g. a manual re-click before the first request
-// finishes), which the click-triggered call sites need too.
+// Uses a generation counter rather than a `cancelled` boolean, since a boolean
+// only handles unmount/dep-change — it can't distinguish two overlapping calls of
+// the SAME generation (e.g. a manual re-click before the first request finishes),
+// which the click-triggered call sites need too.
 //
-// - `resetDeps`: when any of these change, in-flight requests are
-//   invalidated, `data`/`error`/`loading` reset, `onReset` fires, and (if
-//   `enabled`) a new fetch auto-fires — same shape as the auto-fetch effects
-//   this replaces.
-// - `enabled: false`: the deps-effect still resets state on dep change (so a
-//   network switch correctly clears stale results even for a manual-trigger
-//   view), but never auto-fetches — call the returned `run(...args)`
-//   yourself (e.g. from a button's onClick), matching Accounts.jsx/
-//   Trades.jsx/Assets.jsx's search()-style manual lookups.
-// - `onReset`: fires synchronously in the same tick data/error are cleared —
-//   for resetting a derived selection back to a FIXED default (e.g.
-//   Protocols.jsx's trendSelection -> TOTAL_OPTION) before the new fetch starts.
-// - `onSuccess(data)`: fires after a fetch resolves — for deriving a
-//   selection FROM the response (e.g. SmartContracts.jsx picking the
-//   highest-call-count function as the default selection). Deliberately
-//   separate from onReset: one must run before the fetch, the other only
-//   makes sense after.
+// - `resetDeps`: when any of these change, in-flight requests are invalidated,
+//   `data`/`error`/`loading` reset, `onReset` fires, and (if `enabled`) a new
+//   fetch auto-fires.
+// - `enabled: false`: the deps-effect still resets state on dep change, but never
+//   auto-fetches — call the returned `run(...args)` yourself (e.g. a button's
+//   onClick) for manual-lookup views.
+// - `onReset`: fires synchronously when data/error are cleared — for resetting a
+//   derived selection back to a fixed default before the new fetch starts.
+// - `onSuccess(data)`: fires after a fetch resolves — for deriving a selection
+//   FROM the response. Kept separate from `onReset` since one must run before the
+//   fetch and the other only makes sense after.
 export function useAsyncResource(fetcher, resetDeps, options = {}) {
   const { enabled = true, onReset, onSuccess } = options;
 
@@ -40,15 +27,9 @@ export function useAsyncResource(fetcher, resetDeps, options = {}) {
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
 
-  // Latest callbacks kept in refs, not used directly as effect deps — these
-  // are new closures every render (inline arrow functions at call sites are
-  // the norm here), and depending on them by reference would make the
-  // deps-effect below fire on every render instead of only on resetDeps
-  // changes, silently reintroducing the exact staleness bug this hook exists
-  // to prevent. `enabledRef` gets the same treatment for the same reason —
-  // `enabled` is read inside the deps-effect below, so a call site that ever
-  // computes it from state NOT listed in resetDeps needs the current render's
-  // value, not whatever it was when resetDeps last changed.
+  // Latest callbacks kept in refs rather than used as effect deps — they're new
+  // closures every render, and depending on them by reference would make the
+  // deps-effect below fire on every render instead of only on resetDeps changes.
   const fetcherRef = useRef(fetcher);
   const onResetRef = useRef(onReset);
   const onSuccessRef = useRef(onSuccess);
@@ -64,14 +45,8 @@ export function useAsyncResource(fetcher, resetDeps, options = {}) {
     const myGeneration = ++generationRef.current;
     setLoading(true);
     setError(null);
-    // Also clears `data`, not just `error` — without this, a manual/click-
-    // triggered call (enabled: false, e.g. Accounts.jsx's lookup()) that
-    // fails leaves the PREVIOUS result rendering on screen next to the new
-    // error, which is exactly the bug this whole hook exists to prevent. The
-    // deps-effect below already clears `data` before calling `run()` for the
-    // auto-fetch path, so this is a no-op there — it only matters for the
-    // manual-trigger path, which is also the path most likely to be called
-    // repeatedly without an intervening dep change.
+    // Clears `data` too, not just `error` — matters for the manual-trigger path
+    // (deps-effect already clears `data` before calling `run()` on auto-fetch).
     setData(null);
     return fetcherRef
       .current(...args)

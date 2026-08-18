@@ -7,33 +7,27 @@ import { defaultRange, OPS_BREAKDOWN_RANGE_PRESETS } from '../dateUtils.js';
 import { useAsyncResource } from '../hooks/useAsyncResource.js';
 
 export default function NetworkGrowth({ network }) {
-  // All-time trend — backed by Dune (see server/src/routes/growth.js). Horizon
-  // has no aggregate "operations by type per day" endpoint, so a real
-  // multi-month trend can't come from live Horizon scanning the way the
-  // "Recent activity" section below does — that approach hits a hard record
-  // cap within hours on a busy network (verified live: even a 6h window can
-  // exceed it), nowhere near enough for a meaningful trend.
+  // All-time trend — backed by Dune (see server/src/routes/growth.js). Horizon has
+  // no aggregate "operations by type per day" endpoint, and live scanning (like
+  // "Recent activity" below) hits a hard record cap within hours, far short of a
+  // meaningful multi-month trend.
   const {
     data: trend,
     error: trendError,
     loading: trendLoading,
   } = useAsyncResource(() => api.accountGrowthTrend(network), [network]);
 
-  // Per-asset trustline growth — same Dune-backed reasoning as the account
-  // trend above, just broken out by asset instead of network-wide.
+  // Per-asset trustline growth — same Dune-backed reasoning as the account trend.
   const {
     data: trustlines,
     error: trustlinesError,
     loading: trustlinesLoading,
   } = useAsyncResource(() => api.trustlineGrowthTrend(network), [network]);
 
-  // Recent activity — live Horizon, same /api/payments/breakdown route
-  // PaymentsOperations.jsx and SmartContracts.jsx already call. New-account/
-  // trustline counts and the day-bucketed trend here are just additional
-  // fields on that same response, not a separate fetch on their end. Bound by
-  // the same op-density-based range cap as that page (see dateUtils.js's
-  // OPS_BREAKDOWN_RANGE_PRESETS comment) — good for "right now," not for a
-  // real historical trend, which is what the all-time section above is for.
+  // Recent activity — shares the /api/payments/breakdown route with
+  // PaymentsOperations.jsx/SmartContracts.jsx; new-account/trustline fields are
+  // just additional fields on that same response. Bound by the same
+  // op-density-based range cap (see OPS_BREAKDOWN_RANGE_PRESETS in dateUtils.js).
   const [range, setRange] = useState(defaultRange(24));
   const {
     data: recent,

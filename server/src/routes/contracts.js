@@ -33,32 +33,23 @@ function passphraseFor(networkKey) {
 }
 
 // All-time (since Soroban's mainnet launch) total value moved through contract
-// calls — unlike /:id/activity and payments.js's /breakdown, this can't come from
-// live Horizon/RPC scanning (would mean paging ~13.5M ledgers ourselves). Backed
-// instead by a saved Dune query (see server/.env's DUNE_QUERY_ID, and the README)
-// against Dune's pre-indexed `stellar.history_operations`/`stellar.history_effects`
-// tables, which already cover full history. Pubnet-only — Dune doesn't index
-// testnet, and an all-time total wouldn't mean much there anyway (SDF periodically
-// resets testnet, see CLAUDE.md).
+// calls. Can't come from live Horizon/RPC scanning (would mean paging ~13.5M
+// ledgers) — backed by a saved Dune query (DUNE_QUERY_ID) against Dune's
+// pre-indexed `stellar.history_operations`/`stellar.history_effects` tables.
+// Pubnet-only — Dune doesn't index testnet, and an all-time total wouldn't
+// mean much there anyway since SDF periodically resets it.
 router.get('/all-time', async (req, res, next) => {
   try {
     const net = resolveNetwork(req.query.network);
     const unavailable = duneRouteUnavailable(net, DUNE_QUERY_ID, 'DUNE_QUERY_ID', 'All-time totals');
     if (unavailable) return res.json(unavailable);
 
-    // Dune's own materialized result barely changes minute-to-minute (it only
-    // refreshes when the saved query is re-run), so the RAW amounts are
-    // cached generously — no reason to spend a Dune API credit on every page
-    // load. Deliberately NOT wrapping the pricing step in this same 12h
-    // cache (an earlier version did): the USD conversion depends on a live
-    // asset price, which changes far more often than the underlying Dune
-    // amounts do — freezing totalUsd/totalMovedUsd for 12h alongside the
-    // amounts meant a real price move (not rare in crypto) showed as a stale
-    // USD figure for up to 12h with no indication it was stale. Re-pricing
-    // on every request isn't as expensive as it sounds: each individual
-    // asset's price is itself already cached at TTL.RECENT inside
-    // priceMovementList/fetchAssetUsdPrice, so most requests just do fresh
-    // math against an already-cached recent price, not a fresh network call.
+    // Dune's materialized result barely changes minute-to-minute, so the RAW
+    // amounts are cached generously. Pricing is deliberately NOT included in
+    // that cache — USD conversion depends on a live asset price, which
+    // changes far more often than the Dune amounts do, so it's re-priced on
+    // every request. Cheap in practice: each asset's price is itself already
+    // cached at TTL.RECENT inside priceMovementList/fetchAssetUsdPrice.
     const { assets: rawAssets, truncated } = await cached('contractsAllTimeRaw:pubnet', TTL.FINALIZED, async () => {
       const rows = await fetchDuneQueryResults(DUNE_QUERY_ID);
       return {
@@ -74,18 +65,11 @@ router.get('/all-time', async (req, res, next) => {
       };
     });
 
-    // Cloned, not mutated in place — `rawAssets` is the object `cached()`
-    // returns from its own store on every call within the TTL window;
-    // writing priceUsd/totalUsd directly onto those objects would bake a
-    // stale price into the 12h-cached raw data itself.
+    // Cloned, not mutated in place — `rawAssets` is the same object `cached()`
+    // returns on every call within the TTL window; writing priceUsd/totalUsd
+    // directly onto it would bake a stale price into the cached raw data.
     const assets = rawAssets.map((a) => ({ ...a }));
     const expertNetwork = STELLAR_EXPERT_NETWORK.pubnet;
-    // Shared with payments.js's contract-movement/payment-movement pricing —
-    // this route's entries use `totalAmount` as the amount field (not
-    // `total`, payments.js's field name), and `totalAmount` again as the
-    // sort fallback (not `changeCount`) — both previously hand-copied here
-    // as a near-identical inline worker pool that had already drifted from
-    // payments.js's copy in exactly this way.
     await priceMovementList(assets, expertNetwork, 'pubnet', 'totalAmount');
     sortMovementList(assets, 'totalAmount');
 
@@ -105,26 +89,22 @@ router.get('/all-time', async (req, res, next) => {
   }
 });
 
-// Day-bucketed call-volume trend for a specific, confirmed-Soroban protocol —
-// "how often is this actually being used, and is that growing" over time, since
-// launch — plus, now, a real per-function breakdown ("what are they actually
-// calling it to do", not just "a call happened"), both since Soroswap's launch.
-// Currently Soroswap only (contract addresses verified against its own GitHub
-// docs, filtered in the Dune queries themselves, not here). Deliberately NOT
-// extended to other DeFiLlama-listed Stellar "DEX" protocols yet — several of
-// them (Aquarius, LumenSwap, Scopuly) predate Soroban and run mostly or entirely
-// on Stellar's classic protocol-level DEX/liquidity pools, not smart contracts;
-// mixing that in would misrepresent this as "Soroban usage" when much of it isn't.
+// Day-bucketed call-volume trend, plus a per-function breakdown, for a
+// specific, confirmed-Soroban protocol, since launch. Currently Soroswap only
+// (contract addresses verified against its own GitHub docs, filtered in the
+// Dune queries themselves). Deliberately NOT extended to other DeFiLlama-listed
+// Stellar "DEX" protocols yet — several (Aquarius, LumenSwap, Scopuly) predate
+// Soroban and run mostly on Stellar's classic protocol-level DEX/liquidity
+// pools, not smart contracts; mixing that in would misrepresent this as
+// "Soroban usage" when much of it isn't.
 //
-// The function-name breakdown comes from a second, separate Dune query against
-// `parameters_decoded` — Dune decodes each invoke_host_function op's parameters
-// as a ROW("type" varchar, "value" varchar) array; index 2's `.value` is the
-// invoked function's Symbol, per InvokeContractArgs' fixed struct field order
-// (contractAddress, functionName, args) — same fact this codebase's own
-// decodeInvokedFunctionName (payments.js) already relies on for raw XDR, just
-// decoded by Dune instead of by us. Verified live: real function names came
-// back (swap_exact_tokens_for_tokens, add_liquidity, remove_liquidity, ...),
-// not placeholders.
+// The function-name breakdown comes from a second Dune query against
+// `parameters_decoded` — Dune decodes each invoke_host_function op's
+// parameters as a ROW("type" varchar, "value" varchar) array; index 2's
+// `.value` is the invoked function's Symbol, per InvokeContractArgs' fixed
+// struct field order (contractAddress, functionName, args) — same fact
+// payments.js's decodeInvokedFunctionName relies on for raw XDR, decoded by
+// Dune instead of by us here.
 router.get('/protocol-trend', async (req, res, next) => {
   try {
     const net = resolveNetwork(req.query.network);
@@ -132,30 +112,18 @@ router.get('/protocol-trend', async (req, res, next) => {
     if (unavailable) return res.json(unavailable);
 
     const data = await cached('contractsProtocolTrend:soroswap:pubnet:v2', TTL.FINALIZED, async () => {
-      // Two independent Dune queries — fnRows doesn't depend on rows or vice
-      // versa — so fetched concurrently rather than sequentially (each can
-      // take up to fetchDuneQueryResults' own 15s timeout; awaiting them one
-      // after the other roughly doubles this route's worst-case latency for
-      // no reason). Same "independent upstream calls run concurrently" rule
-      // this codebase applies everywhere else (see /:id/activity's two
-      // segments a few hundred lines below).
+      // Two independent Dune queries, fetched concurrently. The functions
+      // query is optional and caught independently so a transient failure on
+      // it (rate limit, timeout) can't take down the primary call-volume
+      // trend, which otherwise succeeded fine.
       const functionsConfigured = duneConfigured(DUNE_SOROSWAP_FUNCTIONS_QUERY_ID);
-      // The functions query is purely optional (see the comment below) — caught
-      // independently so a transient failure on IT (rate limit, timeout, a
-      // momentary Dune hiccup) can't take down the primary call-volume trend,
-      // which succeeded fine. A bare Promise.all here would reject the whole
-      // route on either failing, silently breaking the "optional" promise this
-      // route's own comment makes — same graceful-degradation pattern already
-      // used by fetchViaRpcEvents/fetchViaHorizonFallback below and by
-      // protocols.js's Promise.allSettled for its two DeFiLlama calls.
       const [rows, fnRows] = await Promise.all([
         fetchDuneQueryResults(DUNE_SOROSWAP_TREND_QUERY_ID),
         functionsConfigured ? fetchDuneQueryResults(DUNE_SOROSWAP_FUNCTIONS_QUERY_ID).catch(() => null) : Promise.resolve(null),
       ]);
-      // Read directly off the untransformed `rows`/`fnRows` arrays, not a
-      // .map()/.filter() copy — Array methods that return a new array don't
-      // carry over the `truncated` property fetchDuneQueryResults attaches
-      // (see duneClient.js). Both reads happen before any such transform below.
+      // Read directly off the untransformed `rows`/`fnRows` arrays — a
+      // .map()/.filter() copy would drop the `truncated` property
+      // fetchDuneQueryResults attaches (see duneClient.js).
       let truncated = Boolean(rows.truncated) || Boolean(fnRows?.truncated);
 
       const byDay = new Map();
@@ -168,21 +136,17 @@ router.get('/protocol-trend', async (req, res, next) => {
 
       const daily = Array.from(byDay.values()).sort((a, b) => (a.day < b.day ? -1 : 1));
 
-      // Function-name breakdown is optional — the call-volume trend above still
-      // works even if this second query isn't configured, it just won't have a
-      // "what for" answer to go with the "how often" one.
+      // Function-name breakdown is optional — the call-volume trend above
+      // still works if this second query isn't configured.
       let functionTotals = [];
-      // Object.create(null) rather than {} — the key here is a Soroban
-      // contract's own author-chosen function name (fully attacker-defined),
-      // and this codebase's own data has already shown real, unusual names in
-      // the wild ("yeet"). A plain {} with a key literally named "__proto__"
-      // wouldn't create an own enumerable property — it would reassign the
-      // object's prototype via the inherited setter, silently dropping that
-      // function's data from the JSON response with no error anywhere.
+      // Object.create(null), not {} — the key is a Soroban contract's own
+      // author-chosen function name (attacker-controlled). A plain {} with a
+      // key literally named "__proto__" wouldn't create an own enumerable
+      // property — it would reassign the prototype via the inherited setter,
+      // silently dropping that function's data with no error.
       let dailyByFunction = Object.create(null);
-      // fnRows can be null both when the query isn't configured AND when it IS
-      // configured but its fetch failed (caught above) — both cases degrade
-      // the same way, to an empty function breakdown.
+      // fnRows is null both when the query isn't configured and when it's
+      // configured but the fetch failed — both degrade the same way.
       if (fnRows) {
         const totals = new Map();
         for (const r of fnRows) {
@@ -215,22 +179,17 @@ router.get('/protocol-trend', async (req, res, next) => {
 });
 
 const NETWORK_TRADES_TOP_N = 15;
-const NETWORK_TRADES_MIN_NAME_LEN = 3; // drops cryptic 1-2 char names (e.g. "s", "cm") — see below
+const NETWORK_TRADES_MIN_NAME_LEN = 3; // drops cryptic 1-2 char names (e.g. "s", "cm")
 
 // Network-wide (every Soroban contract, not just known protocols) breakdown of
-// what function gets called when a real trade happens — "real" meaning the same
-// swap-detection signal payments.js already uses live (an operation that moved
-// 2+ distinct assets), just run via Dune against full history instead of a
-// live-Horizon date range. This is deliberately NOT protocol-labeled — we don't
-// have a mapping from contract_id to protocol name network-wide, only for the
-// handful (currently just Soroswap) we've manually verified — so this shows raw
-// function names, which include real noise: some contracts use cryptic 1-2
-// character names (filtered out below, ~2.7% of matched calls, verified
-// negligible), and at least one real result was a joke name ("yeet", the single
-// most-called function in the raw data). Truncated to the top 15 by call count
-// rather than shown in full (94 distinct names in the raw query) — verified live
-// that the top 10 alone cover ~94% of all matched calls, so this is a real
-// simplification, not a meaningful data loss.
+// what function gets called when a real trade happens — same swap-detection
+// signal payments.js uses live (an operation that moved 2+ distinct assets),
+// run via Dune against full history instead of a live-Horizon date range.
+// Deliberately NOT protocol-labeled — there's no contract_id-to-protocol-name
+// mapping network-wide, only for the handful manually verified (currently
+// just Soroswap) — so this shows raw function names, including real noise
+// (e.g. "yeet", a real, non-cryptic but uninformative function name). Top 15
+// by call count, not the full ~94 distinct names in the raw query.
 router.get('/network-trading-activity', async (req, res, next) => {
   try {
     const net = resolveNetwork(req.query.network);
@@ -256,8 +215,7 @@ router.get('/network-trading-activity', async (req, res, next) => {
         .sort((a, b) => b.callCount - a.callCount)
         .slice(0, NETWORK_TRADES_TOP_N);
 
-      // Object.create(null), not {} — see the /protocol-trend route above for
-      // why (a function named "__proto__" would silently corrupt a plain object).
+      // Object.create(null), not {} — see /protocol-trend above.
       const dailyByFunction = Object.create(null);
       for (const f of functionTotals) dailyByFunction[f.name] = dailyRaw.get(f.name) || [];
 
@@ -278,25 +236,15 @@ router.get('/network-trading-activity', async (req, res, next) => {
 
 const PROTOCOL_FUNCTIONS_TOP_N = 15; // per protocol, same display-scope cap as network-trading-activity
 
-// Real per-function call breakdown for a handful of manually-verified protocols
-// beyond just Soroswap — "what are people actually using each one for, and how
-// often." Deliberately NOT filtered by the "moved 2+ distinct assets" swap
-// signal used elsewhere (network-trading-activity, payments.js's swap
-// detection): that filter is right for finding trades, but several of these
-// protocols aren't DEXs — Blend is a lending market, where a real, meaningful
-// call (supply/borrow/repay) moves exactly one asset, not two, and would be
-// invisible to a swap filter. This route answers "how is it used" generally,
-// same shape as /protocol-trend's Soroswap-only function breakdown, just
-// covering more protocols in one query via a contract-address-to-protocol-name
-// lookup built from StellarExpert's Directory API (see CLAUDE.md's "Verified
-// facts" section) rather than hand-verified addresses per protocol.
-//
-// Row shape (r.protocol_name, r.function_name, r.call_count) verified live
-// against the actual saved query (dune.com/queries/8365006): real function
-// names came back per protocol (Blend's top was "submit" at 498K calls — a
-// lending action, not a swap, confirming the no-swap-filter design choice
-// above was right; Soroswap's top was "swap_exact_tokens_for_tokens" at 192K;
-// Phoenix and Sushi came back with real, distinct call patterns too).
+// Real per-function call breakdown for a handful of manually-verified
+// protocols beyond just Soroswap — "what are people actually using each one
+// for." Deliberately NOT filtered by the "moved 2+ distinct assets" swap
+// signal used elsewhere: several of these protocols aren't DEXs — Blend is a
+// lending market, where a real call (supply/borrow/repay) moves exactly one
+// asset and would be invisible to a swap filter. Covers more protocols in one
+// query via a contract-address-to-protocol-name lookup built from
+// StellarExpert's Directory API rather than hand-verified addresses per
+// protocol.
 router.get('/protocol-functions', async (req, res, next) => {
   try {
     const net = resolveNetwork(req.query.network);
@@ -350,21 +298,17 @@ router.get('/:id/activity', async (req, res, next) => {
     const { start, end, startMs, endMs } = parseDateRange(req.query);
     const net = resolveNetwork(req.query.network);
     const horizon = makeHorizonClient(net.horizon);
-    // Floored to the nearest 10 minutes so this value (unlike start/end, which
-    // parseDateRange already floors to the minute) doesn't defeat
-    // ledgerSequenceForTimestamp's cache with a fresh millisecond-precision key
-    // on every single request — RETENTION_DAYS is already a documented safety
-    // margin, so a few minutes of slop here is immaterial.
+    // Floored to 10 minutes (coarser than parseDateRange's minute-flooring of
+    // start/end) so this doesn't defeat ledgerSequenceForTimestamp's cache
+    // with a fresh key on every request — RETENTION_DAYS is already a
+    // safety margin, so a few minutes of slop is immaterial.
     const TEN_MIN_MS = 10 * 60 * 1000;
     const retentionCutoffMs =
       Math.floor((Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000) / TEN_MIN_MS) * TEN_MIN_MS;
 
     const cacheKey = `contractActivity:${net.key}:${id}:${start}:${end}`;
     const data = await cached(cacheKey, ttlForRange(endMs), async () => {
-      // The two segments below hit independent upstreams (Soroban RPC vs.
-      // Horizon) and don't depend on each other — run concurrently rather
-      // than sequentially, same as every other independent-lookup pair in
-      // this codebase.
+      // Independent upstreams (Soroban RPC vs. Horizon) — run concurrently.
       const [eventsSegment, fallbackSegment] = await Promise.all([
         endMs >= retentionCutoffMs
           ? fetchViaRpcEvents(net, horizon, id, Math.max(startMs, retentionCutoffMs), endMs)
@@ -402,20 +346,12 @@ async function fetchViaRpcEvents(net, horizon, contractId, startMs, endMs) {
   // getEvents has no end-time param — page forward with the response cursor
   // until we pass endMs or hit the cap, rather than trusting a single page.
   //
-  // RETENTION_DAYS (6) is a documented safety margin under Soroban RPC's
-  // approximate "~7 days" retention, not a guarantee — a real public node can
-  // still reject `startLedger` as outside its actual retained range (verified
-  // live against mainnet.sorobanrpc.com: a too-old startLedger returns a
-  // SorobanRpcError, "startLedger must be within the ledger range: ..."). Every
-  // other best-effort external call in this file/codebase degrades gracefully
-  // rather than failing the whole request — this one didn't, so a boundary case
-  // took down the entire /:id/activity response (including the unrelated
-  // Horizon-fallback segment) instead of just this segment.
-  //
-  // The ledgerSequenceForTimestamp call is INSIDE this try too (a first attempt
-  // at this fix left it outside, which meant a transient Horizon failure while
-  // resolving the start ledger — the exact class of error this fix exists to
-  // handle — could still take down the whole /:id/activity response).
+  // RETENTION_DAYS (6) is a safety margin under Soroban RPC's approximate
+  // "~7 days" retention, not a guarantee — a public node can still reject
+  // `startLedger` as outside its actual retained range (a SorobanRpcError).
+  // Wrapped in try/catch (including the ledgerSequenceForTimestamp call, not
+  // just the polling loop) so a boundary case degrades just this segment
+  // instead of failing the whole /:id/activity response.
   try {
     const ledger = await ledgerSequenceForTimestamp(horizon, net.key, new Date(startMs).toISOString());
     while (events.length < MAX_EVENTS) {
@@ -472,13 +408,9 @@ async function fetchViaRpcEvents(net, horizon, contractId, startMs, endMs) {
 }
 
 async function fetchViaHorizonFallback(horizon, networkKey, contractId, start, end, passphrase) {
-  // Every other best-effort external call in this file degrades gracefully
-  // rather than failing the whole request (see fetchViaRpcEvents above, fixed
-  // for exactly this reason in an earlier round) — this function previously
-  // didn't, so a transient Horizon failure anywhere in its ledger-sequence
-  // lookup, range fetch, or per-transaction envelope fetches would reject the
-  // whole /:id/activity response via Promise.all, discarding an already-
-  // successful events segment too.
+  // Wrapped like fetchViaRpcEvents above — a transient Horizon failure here
+  // should degrade just this segment, not reject the whole /:id/activity
+  // response via Promise.all and discard an already-successful events segment.
   try {
     const [startSeq, endSeq] = await Promise.all([
       ledgerSequenceForTimestamp(horizon, networkKey, start),
@@ -497,14 +429,11 @@ async function fetchViaHorizonFallback(horizon, networkKey, contractId, start, e
     });
 
     // Horizon's JSON for invoke_host_function ops doesn't expose the invoked
-    // contract's address as plain text — it's only recoverable from the
-    // transaction's raw XDR. Decode each candidate transaction and check its
-    // operations properly, rather than string-matching against encoded bytes
-    // (which can never match — that was the bug in the previous version).
+    // contract's address as plain text — only recoverable by decoding the
+    // transaction's raw XDR (string-matching encoded bytes can never match).
     //
     // Fetching each unique transaction's envelope is independent work, so it
-    // runs with bounded concurrency rather than one-at-a-time — same rationale
-    // as fetchRangeParallel above, just for a different shape of fetch.
+    // runs with bounded concurrency rather than one-at-a-time.
     const uniqueHashes = Array.from(new Set(candidates.map((op) => op.transaction_hash)));
     const matchedHashes = new Set();
     const CONCURRENCY = 6;
@@ -520,16 +449,12 @@ async function fetchViaHorizonFallback(horizon, networkKey, contractId, start, e
     }
     await Promise.all(Array.from({ length: Math.min(CONCURRENCY, uniqueHashes.length) || 1 }, worker));
 
-    // Built once, O(1) lookups below instead of a candidates.find() per matched
-    // hash — candidates can hold up to MAX_OPS (10,000) entries, so a linear scan
-    // per match scaled badly on a busy contract near that cap. Keep the FIRST op
-    // per hash, matching what candidates.find() returned — a transaction with 2+
-    // invoke_host_function operations (real, e.g. batched/multi-call transactions)
-    // would otherwise silently report sourceAccount from whichever op happened to
-    // be processed last, which depends on parallel chunk-fetch timing, not
-    // transaction operation order. `new Map(candidates.map(...))` (a first attempt
-    // at this same optimization) gets this backwards — later entries overwrite
-    // earlier ones — so it's built explicitly with a "first wins" guard instead.
+    // Built once for O(1) lookups instead of a candidates.find() per matched
+    // hash (candidates can hold up to MAX_OPS entries). Keeps the FIRST op
+    // per hash — a transaction with 2+ invoke_host_function operations
+    // (e.g. batched/multi-call) would otherwise report sourceAccount from
+    // whichever op happened to be processed last, which depends on parallel
+    // chunk-fetch timing, not transaction operation order.
     const candidateByHash = new Map();
     for (const c of candidates) {
       if (!candidateByHash.has(c.transaction_hash)) candidateByHash.set(c.transaction_hash, c);

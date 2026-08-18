@@ -17,10 +17,6 @@ router.get('/:id', async (req, res, next) => {
     const horizon = makeHorizonClient(net.horizon);
 
     const data = await cached(`account:${net.key}:${id}`, TTL.LIVE, async () => {
-      // Only balances + payments are fetched — a /transactions call used to be
-      // made here too, but nothing in the client ever rendered the result. An
-      // unused upstream fetch on every single account lookup is pure waste;
-      // removed rather than left "just in case."
       const [account, payPage] = await Promise.all([
         horizon.get(`/accounts/${id}`),
         horizon.get(`/accounts/${id}/payments`, { order: 'desc', limit: 10 }),
@@ -31,30 +27,23 @@ router.get('/:id', async (req, res, next) => {
         sequence: account.sequence,
         subentryCount: account.subentry_count,
         balances: account.balances,
-        // Horizon's /payments collection also includes account_merge records
-        // (per Horizon's own docs) — those have no amount/asset_type/asset_code
-        // on the operation record at all (a merge moves the account's entire
-        // remaining balance, only visible via effects, not this endpoint), so
-        // mapping one straight through would render as a misleading "XLM"
-        // payment with a blank/NaN amount. Filtered out here, matching
-        // payments.js's own PAYMENT_OP_TYPES, which deliberately excludes it
-        // from "payment volume" for the same reason.
+        // account_merge records have no amount/asset_type/asset_code on the
+        // operation itself (a merge moves the entire remaining balance,
+        // visible only via effects) — mapping one through would render as a
+        // misleading "XLM" payment with a blank/NaN amount, so it's filtered
+        // out here, matching payments.js's PAYMENT_OP_TYPES exclusion.
         recentPayments: payPage._embedded.records
           .filter((p) => p.type !== 'account_merge')
           .map((p) => ({
-            id: p.id, // the operation's own id — unique per record, unlike transactionHash
-                      // (a single transaction can contain multiple payment operations)
+            id: p.id, // operation's own id — unique per record, unlike transactionHash
             type: p.type,
             from: p.from,
             to: p.to,
             amount: p.amount,
             assetType: p.asset_type,
             assetCode: p.asset_code,
-            // Two different assets can share the same code under different
-            // issuers (the exact ambiguity assets.js's /top numAccounts and
-            // payments.js's swap legs already account for) — without the
-            // issuer, a payment in a shared code (real or a look-alike scam
-            // token) is indistinguishable from the legitimate asset.
+            // Different assets can share a code under different issuers
+            // (including look-alike scam tokens) — issuer disambiguates.
             assetIssuer: p.asset_issuer,
             createdAt: p.created_at,
             transactionHash: p.transaction_hash,
