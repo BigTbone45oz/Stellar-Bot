@@ -30,3 +30,6 @@ Thumbs.db
 # Project working notes for Claude Code — internal review history, not meant
 # for the public repo. Stays on disk locally; just not tracked/pushed.
 CLAUDE.md
+
+# Local project summary doc — not meant for the public repo.
+*.docx
