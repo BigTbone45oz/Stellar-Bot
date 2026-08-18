@@ -16,6 +16,7 @@ import { fetchRangeParallel } from '../rangeFetch.js';
 import { parseDateRange } from '../validate.js';
 import { priceMovementList, sortMovementList } from '../assetPricing.js';
 import { duneConfigured, fetchDuneQueryResults, duneRouteUnavailable } from '../duneClient.js';
+import { runWorkerPool } from '../workerPool.js';
 
 const router = Router();
 const CONTRACT_ID_RE = /^C[A-Z2-7]{55}$/;
@@ -244,7 +245,10 @@ const PROTOCOL_FUNCTIONS_TOP_N = 15; // per protocol, same display-scope cap as 
 // asset and would be invisible to a swap filter. Covers more protocols in one
 // query via a contract-address-to-protocol-name lookup built from
 // StellarExpert's Directory API rather than hand-verified addresses per
-// protocol.
+// protocol. Unlike /network-trading-activity, no cryptic-short-name filter is
+// applied here — these are known, manually-verified protocol interfaces (not
+// arbitrary network-wide contracts), and live data confirmed zero rows with a
+// function name under 3 characters.
 router.get('/protocol-functions', async (req, res, next) => {
   try {
     const net = resolveNetwork(req.query.network);
@@ -436,18 +440,12 @@ async function fetchViaHorizonFallback(horizon, networkKey, contractId, start, e
     // runs with bounded concurrency rather than one-at-a-time.
     const uniqueHashes = Array.from(new Set(candidates.map((op) => op.transaction_hash)));
     const matchedHashes = new Set();
-    const CONCURRENCY = 6;
-    let nextIdx = 0;
-    async function worker() {
-      while (nextIdx < uniqueHashes.length) {
-        const hash = uniqueHashes[nextIdx++];
-        const tx = await horizon.get(`/transactions/${hash}`);
-        if (transactionTouchesContract(tx.envelope_xdr, passphrase, contractId)) {
-          matchedHashes.add(hash);
-        }
+    await runWorkerPool(uniqueHashes, 6, async (hash) => {
+      const tx = await horizon.get(`/transactions/${hash}`);
+      if (transactionTouchesContract(tx.envelope_xdr, passphrase, contractId)) {
+        matchedHashes.add(hash);
       }
-    }
-    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, uniqueHashes.length) || 1 }, worker));
+    });
 
     // Built once for O(1) lookups instead of a candidates.find() per matched
     // hash (candidates can hold up to MAX_OPS entries). Keeps the FIRST op

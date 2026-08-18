@@ -1,6 +1,7 @@
 import { STELLAR_EXPERT_URL } from './config.js';
 import { fetchJsonOrNull } from './fetchWithTimeout.js';
 import { cached, TTL } from './cache.js';
+import { runWorkerPool } from './workerPool.js';
 
 // StellarExpert's asset-detail `price` field is USD, not XLM. Best-effort: returns
 // null on any failure rather than blocking the caller on a third-party lookup.
@@ -23,20 +24,14 @@ export async function priceMovementList(movementList, expertNetwork, netKey, amo
     }
     return;
   }
-  const CONCURRENCY = 6;
-  let nextIdx = 0;
-  async function priceWorker() {
-    while (nextIdx < movementList.length) {
-      const entry = movementList[nextIdx++];
-      entry.priceUsd = await cached(
-        `assetPriceUsd:${netKey}:${entry.code}:${entry.issuer || 'native'}`,
-        TTL.RECENT,
-        () => fetchAssetUsdPrice(expertNetwork, entry.code, entry.issuer)
-      ).catch(() => null);
-      entry.totalUsd = entry.priceUsd !== null ? entry[amountField] * entry.priceUsd : null;
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, movementList.length) || 1 }, priceWorker));
+  await runWorkerPool(movementList, 6, async (entry) => {
+    entry.priceUsd = await cached(
+      `assetPriceUsd:${netKey}:${entry.code}:${entry.issuer || 'native'}`,
+      TTL.RECENT,
+      () => fetchAssetUsdPrice(expertNetwork, entry.code, entry.issuer)
+    ).catch(() => null);
+    entry.totalUsd = entry.priceUsd !== null ? entry[amountField] * entry.priceUsd : null;
+  });
 }
 
 // Sorts by USD value when known; entries with a failed price lookup fall back

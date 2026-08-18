@@ -6,6 +6,7 @@ import { parseDateRange } from '../validate.js';
 import { STELLAR_EXPERT_NETWORK } from '../ledgerTime.js';
 import { STELLAR_EXPERT_URL } from '../config.js';
 import { fetchJsonOrThrow, fetchTextOrNull } from '../fetchWithTimeout.js';
+import { runWorkerPool } from '../workerPool.js';
 
 const router = Router();
 const ISSUER_RE = /^G[A-Z2-7]{55}$/;
@@ -174,12 +175,19 @@ router.get('/top', async (req, res, next) => {
 
       const records = [...(page1._embedded?.records || []), ...(page2._embedded?.records || [])];
 
+      // Deduped by asset id — the two pages are fetched concurrently (see
+      // above) against a live, rating-sorted list, so an asset that crosses
+      // the page-50 boundary between the two requests could appear in both.
+      const seenAssetIds = new Set();
+
       // rank is assigned AFTER filtering unparseable entries (below), not
       // from this map's index — otherwise the displayed ranking would have
       // gaps (1, 2, 4, 5…) whenever an entry gets dropped, while the client
       // still labels it "Top 100" and renders `rank` as-is.
       return records
         .map((r) => {
+          if (seenAssetIds.has(r.asset)) return null;
+          seenAssetIds.add(r.asset);
           const parsed = parseAssetId(r.asset);
           if (!parsed) return null;
 
@@ -279,33 +287,27 @@ router.get('/details', async (req, res, next) => {
     const results = {};
     // Bounded-concurrency worker pool — independent per-asset work, no
     // reason to serialize it.
-    const CONCURRENCY = 6;
-    let nextIdx = 0;
-    async function worker() {
-      while (nextIdx < parsed.length) {
-        const { code, issuer, domain, key, isNative } = parsed[nextIdx++];
-        const asset = isNative ? null : { code, issuer };
-        const [liquidity, name, volume] = await Promise.all([
-          cached(`assetLiquidity:${net.key}:${code}:${issuer || 'native'}`, TTL.LIVE, () =>
-            isNative
-              ? fetchOrderBookDepth(horizon, null, NATIVE_REFERENCE_ASSET)
-              : fetchOrderBookDepth(horizon, asset, null)
-          ).catch(() => null),
-          !isNative && domain
-            ? cached(`assetName:${net.key}:${code}:${issuer}:${domain}`, TTL.FINALIZED, () =>
-                fetchTomlAssetName(domain, code, issuer)
-              ).catch(() => null)
-            : Promise.resolve(null),
-          cached(`assetVolume:${net.key}:${code}:${issuer || 'native'}:${window}`, TTL.RECENT, () =>
-            isNative
-              ? fetchWindowVolume(horizon, NATIVE_REFERENCE_ASSET, null, window)
-              : fetchWindowVolume(horizon, null, asset, window)
-          ).catch(() => null),
-        ]);
-        results[key] = { liquidity, name, volume };
-      }
-    }
-    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, parsed.length) || 1 }, worker));
+    await runWorkerPool(parsed, 6, async ({ code, issuer, domain, key, isNative }) => {
+      const asset = isNative ? null : { code, issuer };
+      const [liquidity, name, volume] = await Promise.all([
+        cached(`assetLiquidity:${net.key}:${code}:${issuer || 'native'}`, TTL.LIVE, () =>
+          isNative
+            ? fetchOrderBookDepth(horizon, null, NATIVE_REFERENCE_ASSET)
+            : fetchOrderBookDepth(horizon, asset, null)
+        ).catch(() => null),
+        !isNative && domain
+          ? cached(`assetName:${net.key}:${code}:${issuer}:${domain}`, TTL.FINALIZED, () =>
+              fetchTomlAssetName(domain, code, issuer)
+            ).catch(() => null)
+          : Promise.resolve(null),
+        cached(`assetVolume:${net.key}:${code}:${issuer || 'native'}:${window}`, TTL.RECENT, () =>
+          isNative
+            ? fetchWindowVolume(horizon, NATIVE_REFERENCE_ASSET, null, window)
+            : fetchWindowVolume(horizon, null, asset, window)
+        ).catch(() => null),
+      ]);
+      results[key] = { liquidity, name, volume };
+    });
 
     res.json(results);
   } catch (err) {
